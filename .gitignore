@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+venv*/
+.venv/
+env/
+
+# Environment variables
+backend/.env
+.env
+
+# Database (contains training data — commit deliberately if needed)
+backend/signlens.db
+
+# MediaPipe model binary
+backend/hand_landmarker.task
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/

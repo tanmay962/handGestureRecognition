@@ -1,0 +1,499 @@
+// controllers/RecognitionController.js — Gesture Detection v1.0
+// Optimisations:
+//   1. Rate limiting: predict every Nth frame (not every frame)
+//   2. Confidence smoothing: rolling average over last N frames
+//   3. Time-based stability: hold gesture for N ms (not N frames)
+//   4. Separate cooldowns: letter vs word vs same-letter
+//   5. Motion detection: LSTM only activates on movement
+//   6. NLP debounce: wait 300ms before fetching suggestions
+'use strict';
+
+var RecognitionController = (function() {
+  function RecognitionController(staticNN, dynamicNN, sensorModel, sentenceModel, nlpService, ttsService, sequenceCtrl) {
+    this.sNN        = staticNN;
+    this.dNN        = dynamicNN;
+    this.sensor     = sensorModel;
+    this.sentence   = sentenceModel;
+    this.nlp        = nlpService;
+    this.tts        = ttsService;
+    this.seqCtrl    = sequenceCtrl;
+    this.running    = false;
+    this.confThresh = APP_CONFIG.RECOGNITION.CONFIDENCE_THRESHOLD;
+    this.log        = [];
+
+    // ── Rate limiting ────────────────────────────────────────
+    this._frameCount   = 0;
+    this._predictEvery = APP_CONFIG.RECOGNITION.PREDICT_EVERY_N;
+
+    // ── Confidence smoothing ─────────────────────────────────
+    this._confHistory  = {}; // {gestureName: [conf, conf, ...]}
+    this._smoothWindow = APP_CONFIG.RECOGNITION.CONF_SMOOTH_WINDOW;
+
+    // ── Time-based stability ─────────────────────────────────
+    this._stableName      = null;
+    this._stableStartTime = null;
+
+    // ── Cooldowns ────────────────────────────────────────────
+    this._lastConfirmedGesture = null;
+    this._lastConfirmedTime    = 0;
+
+    // ── Motion detection for LSTM ────────────────────────────
+    this._frameBuffer    = [];
+    this._lastFeatures   = null;
+    this._motionActive   = false;
+    this._motionThresh   = APP_CONFIG.RECOGNITION.MOTION_THRESHOLD;
+    this._dynamicActive  = false;
+
+    // ── NLP debounce ─────────────────────────────────────────
+    this._nlpTimer = null;
+
+    // ── Dwell + spelling ────────────────────────────────────
+    this._dwellFingers  = -1;
+    this._dwellStart    = 0;
+    this._dwellActive   = false;
+    this._autoAcceptTimer = null;
+    this._lastLetterTime  = 0;
+
+    // ── System gesture ───────────────────────────────────────
+    this._sysGestStart = 0;
+    this._sysGestName  = null;
+
+    this.contextState = 'IDLE';
+
+    var self = this;
+    // Always update sensor — regardless of recognition running state
+    eventBus.on(Events.FEATURES_EXTRACTED, function(d) {
+      self.sensor.setFromFeatures(d.features, { poseDetected: d.poseDetected });
+      if (self.running) self._onFeatures(d.features);
+    });
+  }
+
+  RecognitionController.prototype.start = function() {
+    if (!this.sNN.trained && !this.dNN.trained) return false;
+    this.running = true;
+    this.contextState = 'RECOGNIZING';
+    eventBus.emit(Events.RECOG_STARTED);
+    return true;
+  };
+
+  RecognitionController.prototype.stop = function() {
+    this.running = false;
+    this.contextState = 'IDLE';
+    eventBus.emit(Events.RECOG_STOPPED);
+  };
+
+  // ── Main frame handler ────────────────────────────────────
+  RecognitionController.prototype._onFeatures = function(features) {
+    // Rate limiting — skip frames
+    this._frameCount++;
+    if (this._frameCount % this._predictEvery !== 0) return;
+
+    this._processFrame(features);
+  };
+
+  RecognitionController.prototype._processFrame = function(features) {
+    var self = this;
+
+    // System gestures check first
+    if (this._checkSystemGestures(features)) return;
+
+    // Dwell selection
+    if (this.sentence.suggestions.length > 0 || this.sentence.wordSuggestions.length > 0) {
+      this._checkDwellSelection();
+    }
+
+    // Motion detection for LSTM
+    var motionDetected = this._detectMotion(features);
+    if (motionDetected) {
+      this._frameBuffer.push(features.slice());
+      this._motionActive = true;
+    } else if (this._motionActive && this._frameBuffer.length >= 15) {
+      // Motion stopped — pad to 45 frames and predict dynamic
+      this._dynamicActive = true;
+      this._motionActive  = false;
+    }
+    if (this._frameBuffer.length > APP_CONFIG.NN.DYNAMIC_FRAMES) {
+      this._frameBuffer.shift();
+    }
+
+    // Static prediction
+    if (!this.sNN.trained) return;
+    fetch('/api/nn/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ features: features, model_type: 'static' }),
+    }).then(function(r) {
+      return r.json();
+    }).then(function(staticResult) {
+      // Confidence smoothing
+      var smoothedConf = self._smoothConfidence(staticResult.name, staticResult.conf);
+
+      // Dynamic prediction if motion detected and buffer ready
+      if (self.dNN.trained && self._dynamicActive && self._frameBuffer.length >= 20) {
+        var traj = self._trimmedBuffer();
+        self._dynamicActive = false;
+        fetch('/api/nn/predict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ features: traj, model_type: 'dynamic' }),
+        }).then(function(r) { return r.json(); })
+          .then(function(dynResult) {
+            self._mergeAndStabilise(staticResult, smoothedConf, dynResult, features);
+          }).catch(function() {
+            self._mergeAndStabilise(staticResult, smoothedConf, null, features);
+          });
+      } else {
+        self._mergeAndStabilise(staticResult, smoothedConf, null, features);
+      }
+    }).catch(function() {});
+
+    this._lastFeatures = features.slice();
+  };
+
+  // ── Confidence smoothing ─────────────────────────────────
+  RecognitionController.prototype._smoothConfidence = function(name, conf) {
+    if (!name) return 0;
+    if (!this._confHistory[name]) this._confHistory[name] = [];
+    this._confHistory[name].push(conf);
+    if (this._confHistory[name].length > this._smoothWindow) {
+      this._confHistory[name].shift();
+    }
+    var sum = 0;
+    for (var i = 0; i < this._confHistory[name].length; i++) {
+      sum += this._confHistory[name][i];
+    }
+    return sum / this._confHistory[name].length;
+  };
+
+  // ── Motion detection ─────────────────────────────────────
+  RecognitionController.prototype._detectMotion = function(features) {
+    if (!this._lastFeatures) return false;
+    var diff = 0;
+    // Check orientation features (indices 5-10, 16-21) for both hands
+    var checkIdx = [5,6,7,8,9,10, 16,17,18,19,20,21];
+    for (var i = 0; i < checkIdx.length; i++) {
+      diff += Math.abs(features[checkIdx[i]] - (this._lastFeatures[checkIdx[i]] || 0));
+    }
+    return (diff / checkIdx.length) > this._motionThresh;
+  };
+
+  // ── Trim buffer to active motion frames ──────────────────
+  RecognitionController.prototype._trimmedBuffer = function() {
+    var buf = this._frameBuffer;
+    // Pad to 45 frames
+    var padded = buf.slice();
+    while (padded.length < APP_CONFIG.NN.DYNAMIC_FRAMES) {
+      padded.push(padded[padded.length - 1] || new Array(41).fill(0));
+    }
+    padded = padded.slice(0, APP_CONFIG.NN.DYNAMIC_FRAMES);
+    var flat = [];
+    for (var i = 0; i < padded.length; i++) {
+      for (var j = 0; j < padded[i].length; j++) {
+        flat.push(padded[i][j]);
+      }
+    }
+    return flat;
+  };
+
+  // ── Merge static + dynamic, then time-based stability ────
+  RecognitionController.prototype._mergeAndStabilise = function(staticResult, smoothedConf, dynResult, features) {
+    var finalName = null, finalConf = 0, finalModel = 'none';
+    var dynThresh = APP_CONFIG.RECOGNITION.DYNAMIC_CONF_THRESH;
+
+    if (dynResult && dynResult.conf > dynThresh) {
+      finalName  = dynResult.name;
+      finalConf  = dynResult.conf;
+      finalModel = 'dynamic';
+    } else if (staticResult && smoothedConf >= this.confThresh) {
+      finalName  = staticResult.name;
+      finalConf  = smoothedConf;
+      finalModel = 'static';
+    }
+
+    // Update display
+    var gn = document.getElementById('gestName');
+    var gc = document.getElementById('gestConf');
+    var gd = document.getElementById('gestDisp');
+    if (finalName) {
+      if (gd) gd.style.display = 'block';
+      if (gn) gn.textContent = finalName;
+      if (gc) gc.textContent = (finalConf * 100).toFixed(1) + '% [' + finalModel + ']';
+    }
+
+    if (!finalName) {
+      this._stableName      = null;
+      this._stableStartTime = null;
+      // Clear confidence history when hand lost
+      this._confHistory = {};
+      return;
+    }
+
+    // Time-based stability check
+    var now = Date.now();
+    if (finalName === this._stableName) {
+      if (!this._stableStartTime) this._stableStartTime = now;
+      var holdTime = this._getHoldTime(finalName);
+      if (now - this._stableStartTime >= holdTime) {
+        // Check cooldown
+        var cooldown = this._getCooldown(finalName, this._lastConfirmedGesture);
+        if (now - this._lastConfirmedTime >= cooldown) {
+          this._lastConfirmedGesture = finalName;
+          this._lastConfirmedTime    = now;
+          this._stableStartTime      = null;
+          this._onGestureConfirmed(finalName, finalConf, finalModel);
+        }
+      }
+    } else {
+      this._stableName      = finalName;
+      this._stableStartTime = now;
+    }
+  };
+
+  // ── Hold time per gesture type ────────────────────────────
+  RecognitionController.prototype._getHoldTime = function(name) {
+    if (name.length === 1 && /[A-Z]/.test(name)) return APP_CONFIG.RECOGNITION.STABLE_MS_LETTER;
+    if (name.length === 1 && /[0-9]/.test(name)) return APP_CONFIG.RECOGNITION.STABLE_MS_NUMBER;
+    return APP_CONFIG.RECOGNITION.STABLE_MS_WORD;
+  };
+
+  // ── Cooldown per gesture type ─────────────────────────────
+  RecognitionController.prototype._getCooldown = function(name, last) {
+    var isLetter = name.length === 1 && /[A-Z]/.test(name);
+    var isNumber = name.length === 1 && /[0-9]/.test(name);
+    if (!isLetter && !isNumber) return APP_CONFIG.RECOGNITION.COOLDOWN_WORD;
+    if (name === last)          return APP_CONFIG.RECOGNITION.COOLDOWN_SAME_LETTER;
+    return APP_CONFIG.RECOGNITION.COOLDOWN_DIFF_LETTER;
+  };
+
+  // ── Gesture confirmed ─────────────────────────────────────
+  RecognitionController.prototype._onGestureConfirmed = function(name, conf, model) {
+    var self     = this;
+    var isLetter = name.length === 1 && /[A-Z]/.test(name);
+    var isDigit  = name.length === 1 && /[0-9]/.test(name);
+
+    if (isLetter || isDigit) {
+      this.contextState = 'SPELLING';
+      this.sentence.addLetter(name);
+      this._lastLetterTime = Date.now();
+      var wordSuggs = this.nlp.getWordSuggestions(this.sentence.getSpelling());
+      this.sentence.setWordSuggestions(wordSuggs);
+      eventBus.emit(Events.SPELLING_UPDATED, {
+        spelling: this.sentence.getSpelling(),
+        suggestions: wordSuggs,
+      });
+      this._startAutoAccept();
+      this.tts.speakIfAuto(name);
+    } else {
+      this.contextState = 'RECOGNIZING';
+      if (this.sentence.getSpelling()) {
+        this.sentence.addWord(this.sentence.getSpelling());
+        this.sentence.clearSpelling();
+      }
+      var combo = this.seqCtrl.pushGesture(name);
+      if (combo) {
+        this.tts.speak(combo.action);
+        combo.action.split(' ').forEach(function(w) { self.sentence.addWord(w); });
+        eventBus.emit(Events.COMBO_DETECTED, combo);
+      } else {
+        this.sentence.addWordFromGesture(name.toLowerCase(), name);
+        this.tts.speakIfAuto(name);
+      }
+      // NLP debounce — wait before fetching
+      this._scheduleNLP();
+    }
+
+    this.log.unshift({ gesture: name, conf: conf, time: new Date(), model: model });
+    if (this.log.length > 50) this.log.pop();
+
+    eventBus.emit(Events.GESTURE_RECOGNIZED, { gesture: name, conf: conf, model: model });
+    eventBus.emit(Events.SENTENCE_UPDATED);
+  };
+
+  // ── NLP debounce ─────────────────────────────────────────
+  RecognitionController.prototype._scheduleNLP = function() {
+    var self = this;
+    if (this._nlpTimer) clearTimeout(this._nlpTimer);
+    this._nlpTimer = setTimeout(function() {
+      self.nlp.getSuggestions(self.sentence, self.sentence.getRecentGestures(5))
+        .then(function(suggs) {
+          self.sentence.setSuggestions(suggs);
+          eventBus.emit(Events.SENTENCE_UPDATED);
+        });
+      self.nlp.getCompletion(self.sentence)
+        .then(function(comp) {
+          self.sentence.setCompletion(comp);
+          eventBus.emit(Events.SENTENCE_UPDATED);
+        });
+    }, APP_CONFIG.RECOGNITION.NLP_DEBOUNCE_MS);
+  };
+
+  // ── System gestures ───────────────────────────────────────
+  RecognitionController.prototype._checkSystemGestures = function(features) {
+    var curls   = features.slice(0, 5);
+    var detected = null;
+    if (curls.every(function(c) { return c > 0.85; }))                              detected = 'speak';
+    else if (curls.every(function(c) { return c < 0.15; }))                         detected = 'clear';
+    else if (curls[0] < 0.2 && curls.slice(1).every(function(c) { return c > 0.8; })) detected = 'backspace';
+
+    if (detected) {
+      if (this._sysGestName === detected) {
+        var elapsed = Date.now() - this._sysGestStart;
+        var needed  = detected === 'speak' ? 2000 : 1500;
+        var prog    = document.getElementById('sysGestProg');
+        if (prog) prog.style.width = Math.min(100, elapsed / needed * 100) + '%';
+        if (elapsed >= needed) {
+          this._executeSysGesture(detected);
+          this._sysGestName = null;
+          this._sysGestStart = 0;
+          return true;
+        }
+      } else {
+        this._sysGestName  = detected;
+        this._sysGestStart = Date.now();
+      }
+    } else {
+      this._sysGestName  = null;
+      this._sysGestStart = 0;
+      var p = document.getElementById('sysGestProg');
+      if (p) p.style.width = '0%';
+    }
+    return false;
+  };
+
+  RecognitionController.prototype._executeSysGesture = function(action) {
+    if (action === 'speak') {
+      this.tts.speak(this.sentence.getSentence() || this.sentence.getDisplayText());
+      eventBus.emit(Events.SYSTEM_GESTURE, { action: 'speak' });
+    } else if (action === 'clear') {
+      this.sentence.clear();
+      eventBus.emit(Events.SENTENCE_UPDATED);
+      eventBus.emit(Events.SYSTEM_GESTURE, { action: 'clear' });
+    } else if (action === 'backspace') {
+      if (this.sentence.getSpelling()) this.sentence.removeLetter();
+      else this.sentence.removeLastWord();
+      eventBus.emit(Events.SENTENCE_UPDATED);
+      eventBus.emit(Events.SYSTEM_GESTURE, { action: 'backspace' });
+    }
+  };
+
+  // ── Dwell selection ───────────────────────────────────────
+  RecognitionController.prototype._checkDwellSelection = function() {
+    var count = this.sensor.countExtendedFingers();
+    if (count >= 1 && count <= 5) {
+      if (this._dwellFingers === count) {
+        if (!this._dwellActive) { this._dwellActive = true; this._dwellStart = Date.now(); }
+        if (Date.now() - this._dwellStart >= APP_CONFIG.RECOGNITION.DWELL_TIME) {
+          this._selectSuggestion(count - 1);
+          this._dwellActive  = false;
+          this._dwellFingers = -1;
+        }
+      } else {
+        this._dwellFingers = count;
+        this._dwellActive  = true;
+        this._dwellStart   = Date.now();
+      }
+    } else {
+      this._dwellActive  = false;
+      this._dwellFingers = -1;
+    }
+  };
+
+  RecognitionController.prototype._selectSuggestion = function(index) {
+    if (this.sentence.wordSuggestions.length > 0 && index < this.sentence.wordSuggestions.length) {
+      var word = this.sentence.wordSuggestions[index];
+      this.sentence.acceptWordSuggestion(word);
+      this.tts.speakIfAuto(word);
+      eventBus.emit(Events.SUGGESTION_SELECTED, { word: word, index: index });
+      eventBus.emit(Events.SENTENCE_UPDATED);
+    } else if (this.sentence.suggestions.length > 0 && index < this.sentence.suggestions.length) {
+      var w = this.sentence.suggestions[index];
+      this.sentence.addWord(w);
+      this.tts.speakIfAuto(w);
+      eventBus.emit(Events.SUGGESTION_SELECTED, { word: w, index: index });
+      eventBus.emit(Events.SENTENCE_UPDATED);
+    }
+  };
+
+  // ── Auto-accept spelling ──────────────────────────────────
+  RecognitionController.prototype._startAutoAccept = function() {
+    var self = this;
+    if (this._autoAcceptTimer) clearTimeout(this._autoAcceptTimer);
+    this._autoAcceptTimer = setTimeout(function() {
+      if (self.sentence.getSpelling() && self.sentence.wordSuggestions.length > 0) {
+        var top = self.sentence.wordSuggestions[0];
+        self.sentence.acceptWordSuggestion(top);
+        self.tts.speakIfAuto(top);
+      } else if (self.sentence.getSpelling()) {
+        self.sentence.addWord(self.sentence.getSpelling());
+        self.sentence.clearSpelling();
+      }
+      eventBus.emit(Events.SENTENCE_UPDATED);
+    }, APP_CONFIG.RECOGNITION.SPELL_PAUSE);
+  };
+
+  // ── Public API ────────────────────────────────────────────
+  RecognitionController.prototype.addSuggestionWord = function(word) {
+    var self = this;
+    this.sentence.addWord(word);
+    return this.nlp.getSuggestions(this.sentence).then(function(s) {
+      self.sentence.setSuggestions(s);
+      return self.nlp.getCompletion(self.sentence);
+    }).then(function(c) {
+      self.sentence.setCompletion(c);
+      eventBus.emit(Events.SENTENCE_UPDATED);
+    });
+  };
+
+  RecognitionController.prototype.clearSentence = function() {
+    var self = this;
+    this.sentence.clear();
+    return this.nlp.getSuggestions(this.sentence).then(function(s) {
+      self.sentence.setSuggestions(s);
+      eventBus.emit(Events.SENTENCE_UPDATED);
+    });
+  };
+
+  RecognitionController.prototype.undoWord = function() {
+    var self = this;
+    if (this.sentence.getSpelling()) this.sentence.removeLetter();
+    else this.sentence.removeLastWord();
+    return this.nlp.getSuggestions(this.sentence).then(function(s) {
+      self.sentence.setSuggestions(s);
+      self.sentence.setCompletion(null);
+      eventBus.emit(Events.SENTENCE_UPDATED);
+    });
+  };
+
+  RecognitionController.prototype.fixGrammar = function() {
+    var self = this;
+    return this.nlp.correctGrammar(this.sentence).then(function(c) {
+      if (c) { self.sentence.replaceWithCorrected(c); eventBus.emit(Events.SENTENCE_UPDATED); return true; }
+      return false;
+    });
+  };
+
+  RecognitionController.prototype.speakSentence = function() {
+    this.tts.speak(this.sentence.getDisplayText());
+  };
+
+  RecognitionController.prototype.acceptCompletion = function() {
+    var self = this;
+    if (this.sentence.acceptCompletion()) {
+      return this.nlp.getSuggestions(this.sentence).then(function(s) {
+        self.sentence.setSuggestions(s);
+        eventBus.emit(Events.SENTENCE_UPDATED);
+      });
+    }
+    return Promise.resolve();
+  };
+
+  RecognitionController.prototype.quickTest = function(gestureName, gestureModel) {
+    var features = gestureModel.simulateStatic(gestureName);
+    // Pad to 41
+    while (features.length < 41) features.push(0);
+    this.sensor.setFromFeatures(features);
+    this._onGestureConfirmed(gestureName, 0.95, 'demo');
+  };
+
+  return RecognitionController;
+})();

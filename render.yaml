@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: gesture-detection
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    healthCheckPath: /api/health

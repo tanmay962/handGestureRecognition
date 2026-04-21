@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<meta name="theme-color" content="#06080d">
+<meta name="description" content="Gesture Detection v1.0 — Hand Gesture Recognition System">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="permissions-policy" content="camera=*, microphone=*">
+<link rel="manifest" href="manifest.json">
+<title>Gesture Detection</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+<div class="app" id="root">
+  <div style="display:flex;align-items:center;justify-content:center;height:80vh;flex-direction:column;gap:12px;color:#3a4160">
+    <div style="font-size:32px">✋</div>
+    <div style="font-size:12px;letter-spacing:.15em">LOADING GESTURE DETECTION v1.0</div>
+    <div style="font-size:10px;color:#2a3150;margin-top:4px">Initialising MediaPipe Holistic...</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629/holistic.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.min.js" crossorigin="anonymous"></script>
+
+<script>
+window.addEventListener('error', function(e) {
+  // Ignore MediaPipe WASM virtual-filesystem errors — harmless, model already cached
+  var msg = e.message || '';
+  if (msg.includes('File exists') || msg.includes('file exists') || msg.includes('FS error') || (e.filename && e.filename.includes('mediapipe'))) {
+    e.preventDefault();
+    if (window._app && window._app.camera) {
+      window._app.camera.holistic = null;
+      window._app.startCamera();
+    }
+    return;
+  }
+  var root = document.getElementById('root');
+  if (!root) return;
+  root.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80vh;flex-direction:column;gap:16px;font-family:monospace"><div style="font-size:32px">⚠</div><div style="font-size:13px;letter-spacing:.1em;color:#fb7185">ERROR</div><div style="font-size:11px;color:#6b7394;max-width:340px;text-align:center;line-height:1.6">' + (e.message || 'Unknown error') + '</div><div style="font-size:10px;color:#3a4160;margin-top:8px">Backend running? <strong style="color:#5eead4">cd backend && python3 main.py</strong></div></div>';
+});
+</script>
+
+<script src="bundle.js?v=1.6"></script>
+
+<script>
+(function() {
+  try {
+    var app = new AppController(document.getElementById('root'));
+    window._app = app;
+    window._lastSampledGesture   = null;
+    window._samplePreview        = null;
+    window._samplePreviewGesture = null;
+    window._trainMeta            = {};
+    window._readiness            = {};
+    window._histStats            = {};
+    window._confThresh           = 0.65;
+    window._perGestAcc           = { static: {}, dynamic: {} };
+    window._trainSection         = 'alphabet';
+    window._guidedGesture        = null;
+    window._livePrediction       = null;
+    window._countdown            = 0;
+    window._customGestures       = [];
+    window._tab                  = 'detect';
+    window._nlpStats             = {};
+    app.start().catch(function(err) {
+      console.error('[GestureDetection] start failed:', err);
+      document.getElementById('root').innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80vh;flex-direction:column;gap:12px;font-family:monospace"><div style="font-size:32px">⚠</div><div style="color:#fb7185;font-size:13px">STARTUP ERROR</div><div style="font-size:11px;color:#6b7394;max-width:320px;text-align:center">' + (err.message || String(err)) + '</div></div>';
+    });
+  } catch(err) {
+    console.error('[GestureDetection] init failed:', err);
+    document.getElementById('root').innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:80vh;flex-direction:column;gap:12px;font-family:monospace"><div style="font-size:32px">⚠</div><div style="color:#fb7185;font-size:13px">INIT ERROR</div><div style="font-size:11px;color:#6b7394;max-width:320px;text-align:center">' + (err.message || String(err)) + '</div></div>';
+  }
+})();
+</script>
+
+<script>
+// PWA Service Worker registration
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/service-worker.js').catch(function(e) {
+      console.warn('[SW] Registration failed:', e);
+    });
+  });
+}
+// iOS TTS fix — unlock audio context on first touch
+document.addEventListener('touchend', function iosAudioFix() {
+  var u = new SpeechSynthesisUtterance('');
+  u.volume = 0;
+  window.speechSynthesis.speak(u);
+  document.removeEventListener('touchend', iosAudioFix);
+}, { once: true });
+// iOS camera fix — resume video on visibility change
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible' && window._app && window._app.camera && window._app.camera.videoEl) {
+    window._app.camera.videoEl.play().catch(function(){});
+  }
+});
+</script>
+</body>
+</html>
