@@ -42,6 +42,8 @@ var APP_CONFIG = {
     SPELL_PAUSE:           2000,
     // NLP debounce
     NLP_DEBOUNCE_MS:       300,
+    // Ensemble voting: average last N probability vectors before confirming
+    ENSEMBLE_WINDOW:       5,
   },
 
   MEDIAPIPE: {

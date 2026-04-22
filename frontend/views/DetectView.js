@@ -16,6 +16,7 @@ export function renderDetectTab(state){
     <div style="height:3px;background:var(--s1);position:relative;margin-bottom:8px"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>
     <div class="fr fr-center mb8" style="gap:6px;flex-wrap:wrap">
       ${camActive?Btn('■ Stop Camera','window._app.stopCamera()','r','sm'):Btn(cameraError?'⚠ Retry Camera':'📷 Start Camera','window._app.startCamera()','o','sm')}
+      ${camActive?Btn('⇄ Flip','window._app.switchCamera()','o','sm'):''}
       ${cameraError?`<div style="font-size:10px;color:var(--r);margin-top:6px;padding:6px 10px;background:var(--rD);border-radius:6px;border:1px solid var(--r)">⚠ ${cameraError}</div>`:''}
       ${!running?Btn('▶ Recognize','window._app.startRecognition()',camActive?'o':'g','',!trained):Btn('■ Stop','window._app.stopRecognition()','r')}
       <select onchange="window._app.setInputMode(this.value)" style="background:var(--s1);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 10px;font-family:inherit;font-size:10px;font-weight:600">

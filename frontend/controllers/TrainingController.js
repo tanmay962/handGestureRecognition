@@ -208,10 +208,11 @@ export class TrainingController {
           body: JSON.stringify({ model_type:'static', inputs:sd.inputs, labels:sd.labels, epochs:ep2, lr:0.008 })
         });
         var sData = await sRes.json();
-        this.staticNN.accuracy = sData.accuracy;
-        this.staticNN.loss     = sData.loss;
-        this.staticNN.epochs   = sData.epochs;
-        this.staticNN.trained  = true;
+        this.staticNN.accuracy     = sData.accuracy;
+        this.staticNN.val_accuracy = sData.val_accuracy || 0;
+        this.staticNN.loss         = sData.loss;
+        this.staticNN.epochs       = sData.epochs;
+        this.staticNN.trained      = true;
         if (!window._perGestAcc) window._perGestAcc = {};
         window._perGestAcc.static = sData.per_gesture_acc || {};
         this.progress = Math.min(85, ((ep + ep2) / STATIC_EPOCHS) * 85);
@@ -241,10 +242,11 @@ export class TrainingController {
           body: JSON.stringify({ model_type:'dynamic', inputs:dd.inputs, labels:dd.labels, epochs:dep2, lr:0.001 })
         });
         var dData = await dRes.json();
-        this.dynamicNN.accuracy = dData.accuracy;
-        this.dynamicNN.loss     = dData.loss;
-        this.dynamicNN.epochs   = dData.epochs;
-        this.dynamicNN.trained  = true;
+        this.dynamicNN.accuracy     = dData.accuracy;
+        this.dynamicNN.val_accuracy = dData.val_accuracy || 0;
+        this.dynamicNN.loss         = dData.loss;
+        this.dynamicNN.epochs       = dData.epochs;
+        this.dynamicNN.trained      = true;
         if (!window._perGestAcc) window._perGestAcc = {};
         window._perGestAcc.dynamic = dData.per_gesture_acc || {};
         this.progress = 85 + ((dep + dep2) / DYN_EPOCHS) * 15;

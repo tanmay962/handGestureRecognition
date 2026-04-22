@@ -20,6 +20,13 @@ var CameraService = (function() {
     this._lastFaceLM    = null;
     this._lastPoseLM    = null;
 
+    // Camera facing mode: 'user' (front) or 'environment' (back)
+    this.facingMode = 'user';
+    // Current live prediction for canvas overlay
+    this._currentPrediction = null;
+    // Status text shown on canvas when no prediction is active
+    this._statusText = null;
+
     // Persistent DOM elements — never destroyed by re-renders
     this.videoEl = document.createElement('video');
     this.videoEl.setAttribute('autoplay', '');
@@ -68,18 +75,65 @@ var CameraService = (function() {
     return Promise.all([
       initPromise,
       navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+        video: { facingMode: self.facingMode, width: { ideal: 640 }, height: { ideal: 480 } }
       }).then(function(stream) {
         self._stream = stream;
         self.videoEl.srcObject = stream;
+        self._applyMirror();
         return self.videoEl.play();
       })
     ]).then(function() {
       self.active = true;
       self._startLoop();
       eventBus.emit(Events.CAMERA_STARTED);
-      console.log('[Camera] started');
+      console.log('[Camera] started facingMode=' + self.facingMode);
     });
+  };
+
+  // ── Mirror transform (front camera = mirrored, back = normal) ────
+  CameraService.prototype._applyMirror = function() {
+    var t = this.facingMode === 'user' ? 'scaleX(-1)' : 'none';
+    this.videoEl.style.transform  = t;
+    this.canvasEl.style.transform = t;
+  };
+
+  // ── Switch between front / back camera ───────────────────────
+  CameraService.prototype.switchCamera = function() {
+    var self = this;
+    this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+    this._applyMirror();
+    this._currentPrediction = null;
+    if (!this.active || !this._stream) return Promise.resolve();
+    // Stop existing tracks then open new stream
+    this._stream.getTracks().forEach(function(t) { t.stop(); });
+    this._stream = null;
+    // Try 'exact' first (needed on some Android devices), fall back on failure
+    return navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: self.facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }
+    }).catch(function() {
+      return navigator.mediaDevices.getUserMedia({
+        video: { facingMode: self.facingMode, width: { ideal: 640 }, height: { ideal: 480 } }
+      });
+    }).then(function(stream) {
+      self._stream = stream;
+      self.videoEl.srcObject = stream;
+      return self.videoEl.play();
+    }).catch(function(err) {
+      // Roll back if new camera unavailable
+      self.facingMode = self.facingMode === 'user' ? 'environment' : 'user';
+      self._applyMirror();
+      console.warn('[Camera] switchCamera failed, reverting:', err);
+    });
+  };
+
+  // ── Set live prediction for canvas overlay ───────────────────
+  CameraService.prototype.setPrediction = function(name, conf, model) {
+    this._currentPrediction = name ? { name: name, conf: conf || 0, model: model || '' } : null;
+  };
+
+  // ── Set status text shown when no prediction is active ───────
+  CameraService.prototype.setStatus = function(text) {
+    this._statusText = text || null;
   };
 
   CameraService.prototype.stop = function() {
@@ -296,7 +350,9 @@ var CameraService = (function() {
   };
 
   CameraService.prototype._correctHandedness = function(label) {
-    if (!APP_CONFIG.MEDIAPIPE.MIRROR_DISPLAY) return label;
+    // Front camera is mirrored → flip handedness so dominant hand matches visual
+    // Back camera is NOT mirrored → keep MediaPipe's labels as-is
+    if (this.facingMode !== 'user') return label;
     return label === 'Left' ? 'Right' : 'Left';
   };
 
@@ -357,6 +413,65 @@ var CameraService = (function() {
           ctx.stroke();
         }
       });
+    }
+
+    // ── Status text overlay (when no prediction is active) ───
+    if (!this._currentPrediction && this._statusText) {
+      var cw2 = canvas.width, ch2 = canvas.height;
+      var sFontSize = Math.min(18, Math.max(11, cw2 * 0.033));
+      var bgGrad2 = ctx.createLinearGradient(0, ch2 * 0.78, 0, ch2);
+      bgGrad2.addColorStop(0, 'rgba(6,8,13,0)');
+      bgGrad2.addColorStop(1, 'rgba(6,8,13,0.75)');
+      ctx.fillStyle = bgGrad2;
+      ctx.fillRect(0, ch2 * 0.78, cw2, ch2 * 0.22);
+      ctx.save();
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.font        = 'bold ' + sFontSize + 'px "IBM Plex Mono",monospace';
+      ctx.shadowColor = 'rgba(0,0,0,0.9)';
+      ctx.shadowBlur  = 10;
+      ctx.fillStyle   = 'rgba(180,185,200,0.85)';
+      ctx.fillText(this._statusText, cw2 / 2, ch2 - 12);
+      ctx.restore();
+    }
+
+    // ── Prediction overlay drawn directly on canvas ───────────
+    if (this._currentPrediction) {
+      var pred = this._currentPrediction;
+      var cw = canvas.width, ch = canvas.height;
+      var nameFontSize = Math.min(60, Math.max(28, cw * 0.11));
+      var confFontSize = Math.round(nameFontSize * 0.28);
+
+      // Fade gradient at bottom so text is readable over any background
+      var bgGrad = ctx.createLinearGradient(0, ch * 0.58, 0, ch);
+      bgGrad.addColorStop(0, 'rgba(6,8,13,0)');
+      bgGrad.addColorStop(1, 'rgba(6,8,13,0.88)');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, ch * 0.58, cw, ch * 0.42);
+
+      ctx.save();
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'alphabetic';
+
+      // Gesture name — teal→purple gradient with glow
+      ctx.font        = 'bold ' + nameFontSize + 'px "IBM Plex Mono",monospace';
+      ctx.shadowColor = 'rgba(0,0,0,0.95)';
+      ctx.shadowBlur  = 18;
+      var nameGrad = ctx.createLinearGradient(cw * 0.2, 0, cw * 0.8, 0);
+      nameGrad.addColorStop(0, '#5eead4');
+      nameGrad.addColorStop(1, '#a78bfa');
+      ctx.fillStyle = nameGrad;
+      ctx.fillText(pred.name, cw / 2, ch - 30);
+
+      // Confidence + model tag
+      ctx.font        = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
+      ctx.fillStyle   = 'rgba(220,224,236,0.80)';
+      ctx.shadowBlur  = 6;
+      var confLabel   = (pred.conf * 100).toFixed(1) + '%';
+      if (pred.model) confLabel += '  [' + pred.model + ']';
+      ctx.fillText(confLabel, cw / 2, ch - 8);
+
+      ctx.restore();
     }
   };
 

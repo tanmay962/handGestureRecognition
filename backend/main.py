@@ -360,6 +360,80 @@ def log_session(event_type,gesture=None,detail=None):
                    (event_type,gesture,detail,time.time()))
 
 # ===========================================================================
+# Feature Scaler (z-score, stored with model for inference consistency)
+# ===========================================================================
+class FeatureScaler:
+    def __init__(self):
+        self.mean_=None; self.std_=None; self.fitted=False
+
+    def fit(self,X):
+        arr=np.array(X,dtype=np.float32)
+        self.mean_=arr.mean(axis=0); self.std_=arr.std(axis=0)+1e-8; self.fitted=True
+
+    def transform(self,X):
+        if not self.fitted: return X
+        arr=np.array(X,dtype=np.float32)
+        return ((arr-self.mean_)/self.std_).tolist()
+
+    def transform_one(self,vec):
+        if not self.fitted: return vec
+        arr=np.array(vec,dtype=np.float32)
+        return ((arr-self.mean_)/self.std_).tolist()
+
+    def fit_transform(self,X):
+        self.fit(X); return self.transform(X)
+
+    def to_dict(self):
+        return {'mean':self.mean_.tolist() if self.mean_ is not None else None,
+                'std': self.std_.tolist()  if self.std_  is not None else None}
+
+    def from_dict(self,d):
+        if d.get('mean') is not None:
+            self.mean_=np.array(d['mean'],dtype=np.float32)
+            self.std_ =np.array(d['std'], dtype=np.float32)
+            self.fitted=True
+
+# ===========================================================================
+# Data Augmentation
+# ===========================================================================
+def _augment_static(inputs, labels, n_copies=2, noise_std=0.04):
+    """Gaussian noise + curl scale jitter — triples the training set."""
+    aug_x, aug_y = list(inputs), list(labels)
+    for vec, lbl in zip(inputs, labels):
+        arr = np.array(vec, dtype=np.float32)
+        for _ in range(n_copies):
+            noisy = arr + np.random.normal(0, noise_std, arr.shape).astype(np.float32)
+            scale = float(np.random.uniform(0.88, 1.12))
+            for ci in list(range(5)) + list(range(11, 16)):
+                if ci < len(noisy):
+                    noisy[ci] = float(np.clip(noisy[ci] * scale, 0.0, 1.0))
+            aug_x.append(noisy.tolist()); aug_y.append(lbl)
+    return aug_x, aug_y
+
+def _augment_dynamic(inputs, labels, n_copies=1, noise_std=0.02):
+    """Time-stretch ±20% + Gaussian noise — doubles the training set."""
+    aug_x, aug_y = list(inputs), list(labels)
+    for seq, lbl in zip(inputs, labels):
+        arr = np.array(seq, dtype=np.float32)
+        frames = len(arr) // DYNAMIC_FEATURES
+        if frames < 2: continue
+        arr2d = arr[:frames*DYNAMIC_FEATURES].reshape(frames, DYNAMIC_FEATURES)
+        for _ in range(n_copies):
+            factor = float(np.random.uniform(0.8, 1.2))
+            new_n  = max(2, int(frames * factor))
+            idx_f  = np.linspace(0, frames-1, new_n)
+            stretch= np.zeros((new_n, DYNAMIC_FEATURES), dtype=np.float32)
+            for fi, fi_f in enumerate(idx_f):
+                lo = int(fi_f); hi = min(lo+1, frames-1); t = fi_f-lo
+                stretch[fi] = arr2d[lo]*(1.0-t) + arr2d[hi]*t
+            out = np.zeros((DYNAMIC_FRAMES, DYNAMIC_FEATURES), dtype=np.float32)
+            copy_n = min(DYNAMIC_FRAMES, new_n)
+            out[:copy_n] = stretch[:copy_n]
+            out += np.random.normal(0, noise_std, out.shape).astype(np.float32)
+            aug_x.append(out.flatten().tolist()); aug_y.append(lbl)
+    return aug_x, aug_y
+
+# ===========================================================================
 # Static Model — MLP with BatchNorm
 # ===========================================================================
 class GestureNet(nn.Module):
@@ -377,9 +451,9 @@ class PyTorchNN:
     def __init__(self,nn_id='static'):
         self.id=nn_id; self.model=None; self.gestures={}
         self.feature_version=FEATURE_VERSION
-        self.trained=False; self.accuracy=0.0; self.loss=1.0
+        self.trained=False; self.accuracy=0.0; self.val_accuracy=0.0; self.loss=1.0
         self.epochs=0; self._input_size=0; self._hidden_sizes=[]; self._output_size=0
-        self.per_gesture_acc={}
+        self.per_gesture_acc={}; self.scaler=FeatureScaler()
 
     def initialize(self,input_size,hidden_sizes,output_size):
         self._input_size=input_size; self._hidden_sizes=hidden_sizes; self._output_size=output_size
@@ -387,17 +461,33 @@ class PyTorchNN:
 
     def train_batch(self,inputs,labels,epochs=10,lr=0.008):
         if not inputs or self.model is None: return
-        # Normalise all inputs to expected input size — handles mixed old/new samples
-        normed=[]
-        for s in inputs:
-            if len(s)<self._input_size:
-                s=list(s)+[0.0]*(self._input_size-len(s))
-            normed.append(s[:self._input_size])
-        X=torch.tensor(normed,dtype=torch.float32).to(DEVICE)
-        y=torch.tensor(labels,dtype=torch.long).to(DEVICE)
+        n=len(inputs)
+        # Val split on original data (20% held out, only when n>=5)
+        if n>=5:
+            val_n=max(1,int(n*0.2)); idx_all=list(range(n)); random.shuffle(idx_all)
+            val_idx=idx_all[:val_n]; train_idx=idx_all[val_n:]
+        else:
+            train_idx=list(range(n)); val_idx=[]
+        tr_in=[inputs[i] for i in train_idx]; tr_lb=[labels[i] for i in train_idx]
+        vl_in=[inputs[i] for i in val_idx];   vl_lb=[labels[i] for i in val_idx]
+        # Augment training set only (noise + curl jitter → 3× data)
+        if len(tr_in)>=4: tr_in,tr_lb=_augment_static(tr_in,tr_lb)
+        # Pad/truncate to input size
+        def _pad(samps):
+            out=[]
+            for s in samps:
+                if len(s)<self._input_size: s=list(s)+[0.0]*(self._input_size-len(s))
+                out.append(s[:self._input_size])
+            return out
+        tr_pad=_pad(tr_in); vl_pad=_pad(vl_in) if vl_in else []
+        # Fit scaler on augmented training data, apply to both splits
+        self.scaler.fit(tr_pad)
+        tr_sc=self.scaler.transform(tr_pad)
+        vl_sc=self.scaler.transform(vl_pad) if vl_pad else []
+        X=torch.tensor(tr_sc,dtype=torch.float32).to(DEVICE)
+        y=torch.tensor(tr_lb,dtype=torch.long).to(DEVICE)
         opt=optim.Adam(self.model.parameters(),lr=lr,weight_decay=1e-4)
         sched=optim.lr_scheduler.CosineAnnealingLR(opt,T_max=max(1,epochs))
-        # Weighted loss for class balance (Phase 2A)
         try:
             counts=torch.bincount(y,minlength=len(self.gestures)).float()
             w=1.0/(counts+1e-6); w=w/w.sum()*len(self.gestures); w=w.to(DEVICE)
@@ -410,6 +500,13 @@ class PyTorchNN:
         with torch.no_grad():
             out=self.model(X); preds=out.argmax(dim=1)
             self.accuracy=(preds==y).float().mean().item(); self.loss=crit(out,y).item()
+            # Real val accuracy (unseen data, no augmentation)
+            self.val_accuracy=0.0
+            if vl_sc:
+                Xv=torch.tensor(vl_sc,dtype=torch.float32).to(DEVICE)
+                yv=torch.tensor(vl_lb,dtype=torch.long).to(DEVICE)
+                vp=self.model(Xv).argmax(dim=1)
+                self.val_accuracy=float((vp==yv).float().mean().item())
             self.per_gesture_acc={}
             for idx,name in self.gestures.items():
                 mask=(y==idx)
@@ -421,7 +518,10 @@ class PyTorchNN:
             return {"idx":-1,"conf":0.0,"probs":[],"name":"Unknown","below_threshold":False}
         self.model.eval()
         pad=features+[0.0]*max(0,self._input_size-len(features))
-        x=torch.tensor([pad[:self._input_size]],dtype=torch.float32).to(DEVICE)
+        vec=pad[:self._input_size]
+        # Apply same z-score scaler fitted during training
+        if self.scaler.fitted: vec=self.scaler.transform_one(vec)
+        x=torch.tensor([vec],dtype=torch.float32).to(DEVICE)
         with torch.no_grad(): probs=torch.softmax(self.model(x),dim=1)[0]
         idx=int(probs.argmax().item()); conf=float(probs[idx].item())
         return {"idx":idx,"conf":conf,"probs":probs.tolist(),"name":self.gestures.get(idx,"Unknown"),"below_threshold":conf<conf_threshold}
@@ -429,14 +529,16 @@ class PyTorchNN:
     def add_gesture(self,name,idx): self.gestures[idx]=name
     def reset(self):
         self.model=None; self.trained=False; self.gestures={}
-        self.accuracy=0.0; self.loss=1.0; self.epochs=0; self.per_gesture_acc={}
+        self.accuracy=0.0; self.val_accuracy=0.0; self.loss=1.0; self.epochs=0
+        self.per_gesture_acc={}; self.scaler=FeatureScaler()
 
     def to_json(self):
         state={k:v.tolist() for k,v in self.model.state_dict().items()} if self.model else {}
         return {"id":self.id,"state_dict":state,"gestures":list(self.gestures.items()),
-                "accuracy":self.accuracy,"loss":self.loss,"epochs":self.epochs,
+                "accuracy":self.accuracy,"val_accuracy":self.val_accuracy,"loss":self.loss,"epochs":self.epochs,
                 "input_size":self._input_size,"hidden_sizes":self._hidden_sizes,
-                "output_size":self._output_size,"per_gesture_acc":self.per_gesture_acc}
+                "output_size":self._output_size,"per_gesture_acc":self.per_gesture_acc,
+                "scaler":self.scaler.to_dict()}
 
     def from_json(self,d):
         self._input_size=d.get("input_size",0); self._hidden_sizes=d.get("hidden_sizes",[])
@@ -447,26 +549,30 @@ class PyTorchNN:
                 self.model.load_state_dict({k:torch.tensor(v) for k,v in d["state_dict"].items()})
                 self.model.to(DEVICE)
         self.gestures={int(k):v for k,v in d.get("gestures",[])}
-        self.accuracy=d.get("accuracy",0.0); self.loss=d.get("loss",1.0)
+        self.accuracy=d.get("accuracy",0.0); self.val_accuracy=d.get("val_accuracy",0.0)
+        self.loss=d.get("loss",1.0)
         self.epochs=d.get("epochs",0); self.trained=bool(self._input_size and d.get("state_dict"))
         self.per_gesture_acc=d.get("per_gesture_acc",{})
+        if d.get("scaler"): self.scaler.from_dict(d["scaler"])
 
 # ===========================================================================
 # Dynamic Model — LSTM with temporal attention (v6 upgrade)
 # ===========================================================================
 class GestureLSTM(nn.Module):
-    def __init__(self,input_size,hidden_size,num_layers,output_size,dropout=0.3):
+    def __init__(self,input_size,hidden_size,num_layers,output_size,dropout=0.3,bidirectional=True):
         super().__init__()
-        self.hidden_size=hidden_size; self.num_layers=num_layers
+        self.hidden_size=hidden_size; self.num_layers=num_layers; self.bidirectional=bidirectional
+        nd=2 if bidirectional else 1
         self.lstm=nn.LSTM(input_size,hidden_size,num_layers,batch_first=True,
-                          dropout=dropout if num_layers>1 else 0.0,bidirectional=False)
-        self.attn=nn.Linear(hidden_size,1)
+                          dropout=dropout if num_layers>1 else 0.0,bidirectional=bidirectional)
+        self.attn=nn.Linear(hidden_size*nd,1)
         self.dropout=nn.Dropout(dropout)
-        self.norm=nn.LayerNorm(hidden_size)
-        self.fc=nn.Linear(hidden_size,output_size)
+        self.norm=nn.LayerNorm(hidden_size*nd)
+        self.fc=nn.Linear(hidden_size*nd,output_size)
     def forward(self,x):
-        h0=torch.zeros(self.num_layers,x.size(0),self.hidden_size).to(x.device)
-        c0=torch.zeros(self.num_layers,x.size(0),self.hidden_size).to(x.device)
+        nd=2 if self.bidirectional else 1
+        h0=torch.zeros(self.num_layers*nd,x.size(0),self.hidden_size).to(x.device)
+        c0=torch.zeros(self.num_layers*nd,x.size(0),self.hidden_size).to(x.device)
         out,_=self.lstm(x,(h0,c0))
         attn_w=torch.softmax(self.attn(out),dim=1)
         ctx=(attn_w*out).sum(dim=1)
@@ -475,13 +581,13 @@ class GestureLSTM(nn.Module):
 class LSTMModel:
     def __init__(self):
         self.model=None; self.gestures={}; self.trained=False
-        self.accuracy=0.0; self.loss=1.0; self.epochs=0
+        self.accuracy=0.0; self.val_accuracy=0.0; self.loss=1.0; self.epochs=0
         self.hidden_size=128; self.num_layers=2
         self._output_size=0; self.per_gesture_acc={}
 
     def initialize(self,num_classes,gesture_list):
         self._output_size=num_classes
-        self.model=GestureLSTM(DYNAMIC_FEATURES,self.hidden_size,self.num_layers,num_classes).to(DEVICE)
+        self.model=GestureLSTM(DYNAMIC_FEATURES,self.hidden_size,self.num_layers,num_classes,bidirectional=True).to(DEVICE)
         self.gestures={i:name for i,name in enumerate(gesture_list)}
 
     def _prepare(self,raw_sequences):
@@ -497,11 +603,21 @@ class LSTMModel:
 
     def train_batch(self,inputs,labels,epochs=10,lr=0.001):
         if not inputs or self.model is None: return
-        X=torch.tensor(self._prepare(inputs),dtype=torch.float32).to(DEVICE)
-        y=torch.tensor(labels,dtype=torch.long).to(DEVICE)
+        n=len(inputs)
+        # Val split on original sequences (20%, only when n>=5)
+        if n>=5:
+            val_n=max(1,int(n*0.2)); idx_all=list(range(n)); random.shuffle(idx_all)
+            val_idx=idx_all[:val_n]; train_idx=idx_all[val_n:]
+        else:
+            train_idx=list(range(n)); val_idx=[]
+        tr_in=[inputs[i] for i in train_idx]; tr_lb=[labels[i] for i in train_idx]
+        vl_in=[inputs[i] for i in val_idx];   vl_lb=[labels[i] for i in val_idx]
+        # Augment training set only (time-stretch + noise → 2× data)
+        if len(tr_in)>=3: tr_in,tr_lb=_augment_dynamic(tr_in,tr_lb)
+        X=torch.tensor(self._prepare(tr_in),dtype=torch.float32).to(DEVICE)
+        y=torch.tensor(tr_lb,dtype=torch.long).to(DEVICE)
         opt=optim.Adam(self.model.parameters(),lr=lr,weight_decay=1e-4)
         sched=optim.lr_scheduler.ReduceLROnPlateau(opt,patience=5,factor=0.5,verbose=False)
-        # Weighted loss for class balance (Phase 2A)
         try:
             counts=torch.bincount(y,minlength=len(self.gestures)).float()
             w=1.0/(counts+1e-6); w=w/w.sum()*len(self.gestures); w=w.to(DEVICE)
@@ -515,6 +631,13 @@ class LSTMModel:
         with torch.no_grad():
             out=self.model(X); preds=out.argmax(dim=1)
             self.accuracy=(preds==y).float().mean().item(); self.loss=crit(out,y).item()
+            # Real val accuracy on unseen sequences (no augmentation)
+            self.val_accuracy=0.0
+            if vl_in:
+                Xv=torch.tensor(self._prepare(vl_in),dtype=torch.float32).to(DEVICE)
+                yv=torch.tensor(vl_lb,dtype=torch.long).to(DEVICE)
+                vp=self.model(Xv).argmax(dim=1)
+                self.val_accuracy=float((vp==yv).float().mean().item())
             self.per_gesture_acc={}
             for idx,name in self.gestures.items():
                 mask=(y==idx)
@@ -538,14 +661,15 @@ class LSTMModel:
     def add_gesture(self,name,idx): self.gestures[idx]=name
     def reset(self):
         self.model=None; self.trained=False; self.gestures={}
-        self.accuracy=0.0; self.loss=1.0; self.epochs=0; self.per_gesture_acc={}
+        self.accuracy=0.0; self.val_accuracy=0.0; self.loss=1.0; self.epochs=0; self.per_gesture_acc={}
 
     def to_json(self):
         state={k:v.tolist() for k,v in self.model.state_dict().items()} if self.model else {}
         return {"type":"lstm","state_dict":state,"gestures":list(self.gestures.items()),
-                "accuracy":self.accuracy,"loss":self.loss,"epochs":self.epochs,
+                "accuracy":self.accuracy,"val_accuracy":self.val_accuracy,"loss":self.loss,"epochs":self.epochs,
                 "hidden_size":self.hidden_size,"num_layers":self.num_layers,
-                "output_size":self._output_size,"per_gesture_acc":self.per_gesture_acc}
+                "output_size":self._output_size,"per_gesture_acc":self.per_gesture_acc,
+                "bidirectional":True}
 
     def from_json(self,d):
         gesture_list=[v for _,v in sorted(d.get("gestures",[]),key=lambda x:int(x[0]))]
@@ -555,9 +679,10 @@ class LSTMModel:
         self.initialize(self._output_size,gesture_list)
         if d.get("state_dict"):
             try: self.model.load_state_dict({k:torch.tensor(v) for k,v in d["state_dict"].items()}); self.model.to(DEVICE)
-            except Exception as e: print(f"[LSTM] load warning: {e}")
+            except Exception as e: print(f"[LSTM] arch mismatch (retrain needed): {e}")
         self.gestures={int(k):v for k,v in d.get("gestures",[])}
-        self.accuracy=d.get("accuracy",0.0); self.loss=d.get("loss",1.0)
+        self.accuracy=d.get("accuracy",0.0); self.val_accuracy=d.get("val_accuracy",0.0)
+        self.loss=d.get("loss",1.0)
         self.epochs=d.get("epochs",0); self.trained=bool(d.get("state_dict"))
         self.per_gesture_acc=d.get("per_gesture_acc",{})
 
@@ -942,10 +1067,10 @@ async def nn_train(req:NNTrainRequest, _:None=Depends(require_admin)):
     async with lock:
         loop=asyncio.get_running_loop()
         await loop.run_in_executor(None, nn.train_batch, req.inputs, req.labels, req.epochs, req.lr)
-    await push("train_progress",{"model":req.model_type,"accuracy":nn.accuracy,"loss":nn.loss,
-                                  "epochs":nn.epochs,"per_gesture_acc":nn.per_gesture_acc})
-    log_session("train_batch",detail=f"{req.model_type} acc={nn.accuracy:.3f}")
-    return{"accuracy":nn.accuracy,"loss":nn.loss,"epochs":nn.epochs,"per_gesture_acc":nn.per_gesture_acc}
+    await push("train_progress",{"model":req.model_type,"accuracy":nn.accuracy,"val_accuracy":nn.val_accuracy,
+                                  "loss":nn.loss,"epochs":nn.epochs,"per_gesture_acc":nn.per_gesture_acc})
+    log_session("train_batch",detail=f"{req.model_type} acc={nn.accuracy:.3f} val={nn.val_accuracy:.3f}")
+    return{"accuracy":nn.accuracy,"val_accuracy":nn.val_accuracy,"loss":nn.loss,"epochs":nn.epochs,"per_gesture_acc":nn.per_gesture_acc}
 
 @app.post("/api/nn/predict")
 def nn_predict(req:PredictRequest):
@@ -966,10 +1091,10 @@ def nn_predict(req:PredictRequest):
 
 @app.get("/api/nn/status")
 def nn_status():
-    return{"static":{"trained":static_nn.trained,"accuracy":static_nn.accuracy,"loss":static_nn.loss,
-                     "epochs":static_nn.epochs,"per_gesture_acc":static_nn.per_gesture_acc},
-           "dynamic":{"trained":dynamic_nn.trained,"accuracy":dynamic_nn.accuracy,"loss":dynamic_nn.loss,
-                      "epochs":dynamic_nn.epochs,"model_type":"LSTM","per_gesture_acc":dynamic_nn.per_gesture_acc}}
+    return{"static":{"trained":static_nn.trained,"accuracy":static_nn.accuracy,"val_accuracy":static_nn.val_accuracy,
+                     "loss":static_nn.loss,"epochs":static_nn.epochs,"per_gesture_acc":static_nn.per_gesture_acc},
+           "dynamic":{"trained":dynamic_nn.trained,"accuracy":dynamic_nn.accuracy,"val_accuracy":dynamic_nn.val_accuracy,
+                      "loss":dynamic_nn.loss,"epochs":dynamic_nn.epochs,"model_type":"LSTM","per_gesture_acc":dynamic_nn.per_gesture_acc}}
 
 @app.post("/api/nn/save/{model_type}")
 async def nn_save(model_type:str, source:str='camera'):
@@ -1166,7 +1291,7 @@ async def generate_demo(req:GenerateDemoRequest):
     result={}; now=time.time()
     for name in req.gestures:
         t=GESTURE_TEMPLATES.get(name,{})
-        static=[simulate_static(name) for _ in range(35)]
+        static=[simulate_static(name)[0] for _ in range(35)]
         dynamic=[s for _ in range(25) if(s:=simulate_dynamic(name,DYNAMIC_FRAMES)) is not None] if t.get('type')=='dynamic' else []
         with get_db() as db:
             for s in static:

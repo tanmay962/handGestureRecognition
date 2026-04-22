@@ -25,9 +25,9 @@ var RecognitionController = (function() {
     this._frameCount   = 0;
     this._predictEvery = APP_CONFIG.RECOGNITION.PREDICT_EVERY_N;
 
-    // ── Confidence smoothing ─────────────────────────────────
-    this._confHistory  = {}; // {gestureName: [conf, conf, ...]}
-    this._smoothWindow = APP_CONFIG.RECOGNITION.CONF_SMOOTH_WINDOW;
+    // ── Probability-vector ensemble ──────────────────────────
+    this._probHistory    = []; // [{probs:[], name:'', idx:0}, ...]
+    this._ensembleWindow = APP_CONFIG.RECOGNITION.ENSEMBLE_WINDOW || 5;
 
     // ── Time-based stability ─────────────────────────────────
     this._stableName      = null;
@@ -125,8 +125,15 @@ var RecognitionController = (function() {
     }).then(function(r) {
       return r.json();
     }).then(function(staticResult) {
-      // Confidence smoothing
-      var smoothedConf = self._smoothConfidence(staticResult.name, staticResult.conf);
+      // Ensemble: average last N probability vectors, take argmax of the mean
+      var ensembled = self._ensembleVote(staticResult);
+
+      // Broadcast live prediction to canvas overlay on every frame
+      if (ensembled && ensembled.name && ensembled.conf > 0.25) {
+        eventBus.emit(Events.GESTURE_PREDICTING, {
+          gesture: ensembled.name, conf: ensembled.conf, model: 'static'
+        });
+      }
 
       // Dynamic prediction if motion detected and buffer ready
       if (self.dNN.trained && self._dynamicActive && self._frameBuffer.length >= 20) {
@@ -138,31 +145,54 @@ var RecognitionController = (function() {
           body: JSON.stringify({ features: traj, model_type: 'dynamic' }),
         }).then(function(r) { return r.json(); })
           .then(function(dynResult) {
-            self._mergeAndStabilise(staticResult, smoothedConf, dynResult, features);
+            if (dynResult && dynResult.conf > APP_CONFIG.RECOGNITION.DYNAMIC_CONF_THRESH) {
+              eventBus.emit(Events.GESTURE_PREDICTING, {
+                gesture: dynResult.name, conf: dynResult.conf, model: 'dynamic'
+              });
+            }
+            self._mergeAndStabilise(ensembled, ensembled.conf, dynResult, features);
           }).catch(function() {
-            self._mergeAndStabilise(staticResult, smoothedConf, null, features);
+            self._mergeAndStabilise(ensembled, ensembled.conf, null, features);
           });
       } else {
-        self._mergeAndStabilise(staticResult, smoothedConf, null, features);
+        self._mergeAndStabilise(ensembled, ensembled.conf, null, features);
       }
     }).catch(function() {});
 
     this._lastFeatures = features.slice();
   };
 
-  // ── Confidence smoothing ─────────────────────────────────
-  RecognitionController.prototype._smoothConfidence = function(name, conf) {
-    if (!name) return 0;
-    if (!this._confHistory[name]) this._confHistory[name] = [];
-    this._confHistory[name].push(conf);
-    if (this._confHistory[name].length > this._smoothWindow) {
-      this._confHistory[name].shift();
+  // ── Probability-vector ensemble ──────────────────────────
+  // Averages last N full softmax outputs and argmaxes the mean.
+  // More accurate than per-name confidence averaging because it
+  // considers all classes simultaneously.
+  RecognitionController.prototype._ensembleVote = function(result) {
+    if (!result || !result.probs || result.probs.length === 0) {
+      return result || { name: 'Unknown', conf: 0, idx: -1, probs: [] };
     }
-    var sum = 0;
-    for (var i = 0; i < this._confHistory[name].length; i++) {
-      sum += this._confHistory[name][i];
+    this._probHistory.push({ probs: result.probs.slice(), name: result.name, idx: result.idx });
+    if (this._probHistory.length > this._ensembleWindow) {
+      this._probHistory.shift();
     }
-    return sum / this._confHistory[name].length;
+    if (this._probHistory.length < 2) return result;
+
+    // Element-wise average across history
+    var n = result.probs.length;
+    var avg = new Array(n).fill(0);
+    for (var h = 0; h < this._probHistory.length; h++) {
+      var pv = this._probHistory[h].probs;
+      for (var j = 0; j < n && j < pv.length; j++) {
+        avg[j] += pv[j] / this._probHistory.length;
+      }
+    }
+    var bestIdx = 0, bestConf = 0;
+    for (var k = 0; k < avg.length; k++) {
+      if (avg[k] > bestConf) { bestConf = avg[k]; bestIdx = k; }
+    }
+    // Look up name from the frontend gesture map
+    var bestName = (this.sNN && this.sNN.getName) ? this.sNN.getName(bestIdx) : result.name;
+    if (!bestName || bestName === 'Unknown') bestName = result.name;
+    return { name: bestName, conf: bestConf, idx: bestIdx, probs: avg };
   };
 
   // ── Motion detection ─────────────────────────────────────
@@ -223,8 +253,9 @@ var RecognitionController = (function() {
     if (!finalName) {
       this._stableName      = null;
       this._stableStartTime = null;
-      // Clear confidence history when hand lost
-      this._confHistory = {};
+      this._probHistory     = [];
+      // Clear canvas overlay when hand is lost
+      eventBus.emit(Events.GESTURE_PREDICTING, { gesture: null, conf: 0, model: '' });
       return;
     }
 

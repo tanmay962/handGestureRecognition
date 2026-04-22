@@ -82,6 +82,21 @@ export class AppController {
       }
       rr();
     });
+    // Live prediction → camera canvas overlay
+    eventBus.on(Events.GESTURE_PREDICTING, function(d) {
+      self.camera.setPrediction(d.gesture || null, d.conf || 0, d.model || '');
+    });
+    // Clear overlay when recognition stops; show status hint
+    eventBus.on(Events.RECOG_STOPPED, function() {
+      self.camera.setPrediction(null, 0, '');
+      var trained = self.staticNN.trained || self.dynamicNN.trained;
+      self.camera.setStatus(trained ? 'TAP  ▶  TO RECOGNIZE' : 'TRAIN MODEL FIRST');
+      rr();
+    });
+    // Clear status when recognition starts
+    eventBus.on(Events.RECOG_STARTED, function() {
+      self.camera.setStatus('DETECTING...');
+    });
     eventBus.on(Events.TRAIN_PROGRESS,     rr);
     eventBus.on(Events.TRAIN_COMPLETE,     rr);
     eventBus.on(Events.SENTENCE_UPDATED,   rr);
@@ -286,6 +301,13 @@ export class AppController {
       try {
         this._cameraError = null;
         await this.camera.start();
+        var trained = this.staticNN.trained || this.dynamicNN.trained;
+        if (trained && !this.recogCtrl.running) {
+          this.recogCtrl.start();
+          // RECOG_STARTED event will set status to 'DETECTING...'
+        } else {
+          this.camera.setStatus(trained ? 'TAP  ▶  TO RECOGNIZE' : 'TRAIN MODEL FIRST');
+        }
         this.view.render();
       } catch(e) {
         console.warn('[App] Camera:', e);
@@ -303,12 +325,22 @@ export class AppController {
   }
   async startCamera() { await this._autoCamera(); this.trainCtrl.setCamera(this.camera); }
   stopCamera()       { this.camera.stop(); this.view.render(); }
+  async switchCamera() { await this.camera.switchCamera(); this.view.render(); }
   _mountCamera() {
     if (!this.camera.active) return;
     var main  = document.getElementById('vidContainer');
     var train = document.getElementById('trainVidContainer');
     if (main)  this.camera.mountInto(main);
     else if (train) this.camera.mountInto(train);
+    // Ensure status text matches current state
+    if (!this.camera._statusText && !this.camera._currentPrediction) {
+      if (this.recogCtrl.running) {
+        this.camera.setStatus('DETECTING...');
+      } else {
+        var trained = this.staticNN.trained || this.dynamicNN.trained;
+        this.camera.setStatus(trained ? 'TAP  ▶  TO RECOGNIZE' : 'TRAIN MODEL FIRST');
+      }
+    }
   }
 
   // ── Recognition ───────────────────────────────────────────────────────────
