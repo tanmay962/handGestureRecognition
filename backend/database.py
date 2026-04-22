@@ -1,10 +1,3 @@
-"""
-database.py — SQLite setup and helpers for Gesture Detection
-
-Handles schema creation, migration from old formats, and
-the gesture template + simulation data used for demo mode.
-"""
-
 import json
 import math
 import random
@@ -20,9 +13,6 @@ DYNAMIC_FRAMES   = 45
 MIN_STATIC_SAMPLES  = 10
 MIN_DYNAMIC_SAMPLES = 5
 
-# Reference poses for demo data generation.
-# curls: [thumb, index, middle, ring, pinky] 0=open 1=closed
-# ori:   [dx, dy, dz, sx, sy, sz] hand orientation
 GESTURE_TEMPLATES = {
     'Hello':    {'curls':[.1,.1,.1,.1,.1], 'ori':[0,-.8,.1,.02,-.01,.01],  'type':'dynamic'},
     'Thank You':{'curls':[.2,.3,.7,.7,.5], 'ori':[.1,-.6,.3,.01,.02,-.01], 'type':'dynamic'},
@@ -77,7 +67,7 @@ GESTURE_TEMPLATES = {
 DEFAULT_GESTURES = ['Hello','Thank You','Yes','No','Help','Please','Sorry','Stop','Go','Water']
 
 
-# ── Simple helpers ────────────────────────────────────────────────────────────
+# Simple helpers 
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
@@ -86,7 +76,7 @@ def noise(scale=0.1):
     return (random.random() - 0.5) * scale
 
 
-# ── Data simulation (for demo mode) ──────────────────────────────────────────
+#  Data simulation (for demo mode) 
 
 def _sim_one_hand(name, mirror=False):
     t = GESTURE_TEMPLATES.get(name)

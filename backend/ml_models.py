@@ -1,14 +1,3 @@
-"""
-ml_models.py — PyTorch gesture recognition models
-
-Static gestures: MLP with BatchNorm (GestureNet / PyTorchNN)
-Dynamic gestures: bidirectional LSTM with attention (GestureLSTM / LSTMModel)
-
-Both models are trained entirely on the Python side and serialised
-to JSON for storage in SQLite. The JS frontend just sends feature
-vectors over HTTP — it never touches the model weights directly.
-"""
-
 import random
 import numpy as np
 import torch
@@ -20,9 +9,7 @@ from database import STATIC_FEATURES, DYNAMIC_FEATURES, DYNAMIC_FRAMES
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 FEATURE_VERSION = "1.0"
 
-
-# ── Feature scaler (z-score normalisation) ───────────────────────────────────
-
+#Z-Score
 class FeatureScaler:
     """Fits a z-score scaler on training data and applies it consistently at inference time."""
 
@@ -66,9 +53,9 @@ class FeatureScaler:
             self.fitted = True
 
 
-# ── Data augmentation ─────────────────────────────────────────────────────────
+# Data augmentation 
 
-def augment_static(inputs, labels, n_copies=2, noise_std=0.04):
+def augment_static(inputs, labels, n_copies=3, noise_std=0.04):
     """Gaussian noise + curl scale jitter — roughly triples the training set."""
     aug_x = list(inputs)
     aug_y = list(labels)
@@ -124,7 +111,7 @@ def augment_dynamic(inputs, labels, n_copies=1, noise_std=0.02):
     return aug_x, aug_y
 
 
-# ── Static model: MLP with BatchNorm ─────────────────────────────────────────
+#  Static model: MLP with BatchNorm 
 
 class GestureNet(nn.Module):
     def __init__(self, input_size, hidden_sizes, output_size):
@@ -132,7 +119,7 @@ class GestureNet(nn.Module):
         layers = []
         prev   = input_size
         for h in hidden_sizes:
-            layers += [nn.Linear(prev, h), nn.BatchNorm1d(h), nn.ReLU(), nn.Dropout(0.15)]
+            layers += [nn.Linear(prev, h), nn.BatchNorm1d(h), nn.ReLU(), nn.Dropout(0.2)]
             prev = h
         layers.append(nn.Linear(prev, output_size))
         self.net = nn.Sequential(*layers)
@@ -211,14 +198,14 @@ class PyTorchNN:
         X = torch.tensor(tr_sc, dtype=torch.float32).to(DEVICE)
         y = torch.tensor(tr_lb, dtype=torch.long).to(DEVICE)
 
-        # Class-balanced loss
+        # Class-balanced loss with label smoothing (reduces overconfidence)
         try:
             counts = torch.bincount(y, minlength=len(self.gestures)).float()
             w = 1.0 / (counts + 1e-6)
             w = w / w.sum() * len(self.gestures)
-            crit = nn.CrossEntropyLoss(weight=w.to(DEVICE))
+            crit = nn.CrossEntropyLoss(weight=w.to(DEVICE), label_smoothing=0.1)
         except Exception:
-            crit = nn.CrossEntropyLoss()
+            crit = nn.CrossEntropyLoss(label_smoothing=0.1)
 
         opt   = optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-4)
         sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs))
@@ -228,6 +215,7 @@ class PyTorchNN:
             opt.zero_grad()
             loss = crit(self.model(X), y)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             opt.step()
             sched.step()
 
@@ -436,9 +424,9 @@ class LSTMModel:
             counts = torch.bincount(y, minlength=len(self.gestures)).float()
             w      = 1.0 / (counts + 1e-6)
             w      = w / w.sum() * len(self.gestures)
-            crit   = nn.CrossEntropyLoss(weight=w.to(DEVICE))
+            crit   = nn.CrossEntropyLoss(weight=w.to(DEVICE), label_smoothing=0.1)
         except Exception:
-            crit = nn.CrossEntropyLoss()
+            crit = nn.CrossEntropyLoss(label_smoothing=0.1)
 
         opt   = optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-4)
         sched = optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
@@ -448,6 +436,7 @@ class LSTMModel:
             opt.zero_grad()
             loss = crit(self.model(X), y)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             opt.step()
             if ep % 5 == 0:
                 sched.step(loss)

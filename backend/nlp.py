@@ -1,18 +1,12 @@
 """
-nlp.py — Language model for next-word suggestions and sentence tracking
 
-Uses NLTK's Kneser-Ney trigram LM as the base model, plus a personal
-model that retrains automatically from the user's own signing history.
-Sentence state is tracked here too since it's closely tied to NLP.
-"""
+Uses NLTK's Kneser-Ney trigram LM as the base model, """
 
 import json
 from nltk.lm import KneserNeyInterpolated
 from nltk.lm.preprocessing import padded_everygram_pipeline
 
 
-# Common words the suggestion system pulls from.
-# This is just a starting vocabulary — the KN model scores over it.
 WORD_LIST = (
     "the,be,to,of,and,a,in,that,have,I,it,for,not,on,with,he,as,you,do,at,this,but,"
     "his,by,from,they,we,her,she,or,an,will,my,one,all,would,there,their,what,so,up,"
@@ -30,7 +24,7 @@ WORD_LIST = (
     "soon,already,again,still,before,after,during,while,because,since,until,safe,ready"
 ).split(',')
 
-# Seed phrases for the base language model.
+
 NLP_PHRASES = [
     "hello how are you today",
     "thank you very much please",
@@ -65,7 +59,7 @@ NLP_PHRASES = [
 ]
 
 
-# ── Language model state ──────────────────────────────────────────────────────
+#  Language model state 
 
 _base_lm      = None
 _base_vocab   = set()
@@ -137,7 +131,7 @@ def load_personal_corpus_from_db():
         print(f"[NLP] Personal corpus load skipped: {e}")
 
 
-# ── Suggestion functions ──────────────────────────────────────────────────────
+#  Suggestion functions 
 
 def kn_suggest(words, n=5, use_personal=True):
     """Suggest next words using the personal model then the base model."""

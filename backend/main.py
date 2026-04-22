@@ -1,14 +1,3 @@
-"""
-main.py — Gesture Detection API server
-
-FastAPI backend for hand gesture recognition.
-ML: PyTorch MLP (static) + bidirectional LSTM (dynamic)
-NLP: NLTK Kneser-Ney trigram + personal adaptive model
-DB:  SQLite via database.py
-
-Run with: uvicorn main:app --reload
-"""
-
 import asyncio
 import base64
 import json
@@ -58,20 +47,20 @@ FRONTEND = Path(__file__).parent.parent / "frontend"
 MP_MODEL  = Path(__file__).parent / "hand_landmarker.task"
 
 
-# ── Global model instances ────────────────────────────────────────────────────
+#  Global model instances 
 
 static_nn   = PyTorchNN("static")
 dynamic_nn  = LSTMModel()
 _conf_threshold = 0.65
 
-# One lock per model — prevents concurrent training from corrupting weights
+
 _static_train_lock  = asyncio.Lock()
 _dynamic_train_lock = asyncio.Lock()
 
 sentence_state = SentenceState()
 
 
-# ── Admin auth ────────────────────────────────────────────────────────────────
+#  Admin auth 
 
 _ADMIN_PIN = os.environ.get("ADMIN_PIN", "").strip()
 if not _ADMIN_PIN:
@@ -82,7 +71,7 @@ def require_admin(x_admin_pin: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Invalid or missing admin PIN")
 
 
-# ── WebSocket manager ─────────────────────────────────────────────────────────
+#  WebSocket manager 
 
 class ConnectionManager:
     def __init__(self):
@@ -112,7 +101,7 @@ async def push(event, data=None):
     await manager.broadcast({"event": event, **(data or {})})
 
 
-# ── MediaPipe (server-side, optional) ─────────────────────────────────────────
+#  MediaPipe (server-side, optional) 
 
 _mp_ready      = False
 _mp_landmarker = None
@@ -171,7 +160,7 @@ def _landmarks_to_features(lm):
     return curls + hd + [sx/ls * 0.1, sy/ls * 0.1, sz/ls * 0.1]
 
 
-# ── MQTT subscriber ───────────────────────────────────────────────────────────
+#  MQTT subscriber 
 
 _mqtt_enabled = False
 _mqtt_client  = None
@@ -269,7 +258,7 @@ def start_mqtt_subscriber():
         _mqtt_enabled = False
 
 
-# ── App lifespan ──────────────────────────────────────────────────────────────
+#  App lifespan 
 
 @asynccontextmanager
 async def lifespan(app):
@@ -298,7 +287,7 @@ async def lifespan(app):
         print("[MQTT] Disconnected")
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────────────
+#  FastAPI app 
 
 app = FastAPI(title="Gesture Detection v1.0", lifespan=lifespan)
 
@@ -315,7 +304,7 @@ app.add_middleware(
 )
 
 
-# ── Request models (Pydantic) ─────────────────────────────────────────────────
+#  Request models (Pydantic) 
 
 class NNInitRequest(BaseModel):
     model_type:     str
@@ -379,7 +368,7 @@ class PredLogRequest(BaseModel):
     model_type: str
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+#  Routes 
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -1154,7 +1143,7 @@ def delete_setting(key: str):
     return {"ok": True}
 
 
-# -- Frontend static files (must be last) --
+#  Frontend static files (must be last) 
 
 @app.get("/service-worker.js")
 async def sw_route():
