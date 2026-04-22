@@ -1,14 +1,11 @@
-// models/SentenceModel.js — v6.1 Phase 2B
-// Tracks gesture sequence alongside sentence for NLP personalisation
-// No optional-chaining — Safari 12 safe
 export class SentenceModel {
   constructor() {
-    this.words           = [];
-    this.spelling        = '';
-    this.context         = [];
-    this.suggestions     = ['hello','I','please','help','thank'];
+    this.words = [];
+    this.spelling = '';
+    this.context = [];
+    this.suggestions = ['hello', 'I', 'please', 'help', 'thank'];
     this.wordSuggestions = [];
-    this.completion      = null;
+    this.completion = null;
     this.gestureSequence = []; // Phase 2B: tracks gestures used to build sentence
   }
 
@@ -47,19 +44,19 @@ export class SentenceModel {
     }
   }
 
-  getSentence()     { return this.words.join(' '); }
-  getLastWord()     { return this.words[this.words.length - 1] || null; }
-  getWordCount()    { return this.words.length; }
-  getContextString(){ return this.context.slice(-20).join(' '); }
-  getRecentGestures(n){ return this.gestureSequence.slice(-(n || 5)); }
-  setSuggestions(s) { this.suggestions     = s || []; }
-  setCompletion(t)  { this.completion      = t; }
-  setWordSuggestions(s){ this.wordSuggestions = s || []; }
+  getSentence() { return this.words.join(' '); }
+  getLastWord() { return this.words[this.words.length - 1] || null; }
+  getWordCount() { return this.words.length; }
+  getContextString() { return this.context.slice(-20).join(' '); }
+  getRecentGestures(n) { return this.gestureSequence.slice(-(n || 5)); }
+  setSuggestions(s) { this.suggestions = s || []; }
+  setCompletion(t) { this.completion = t; }
+  setWordSuggestions(s) { this.wordSuggestions = s || []; }
 
-  addLetter(ch)  { this.spelling += ch.toLowerCase(); this._syncToServer('add_letter', ch); }
+  addLetter(ch) { this.spelling += ch.toLowerCase(); this._syncToServer('add_letter', ch); }
   removeLetter() { this.spelling = this.spelling.slice(0, -1); }
-  clearSpelling(){ this.spelling = ''; this.wordSuggestions = []; }
-  getSpelling()  { return this.spelling; }
+  clearSpelling() { this.spelling = ''; this.wordSuggestions = []; }
+  getSpelling() { return this.spelling; }
 
   acceptWordSuggestion(word) {
     this.addWord(word); this.spelling = ''; this.wordSuggestions = [];
@@ -68,14 +65,14 @@ export class SentenceModel {
 
   acceptCompletion() {
     if (!this.completion) return false;
-    this.words = this.completion.split(' ').map(function(w){ return w.toLowerCase(); });
+    this.words = this.completion.split(' ').map(function (w) { return w.toLowerCase(); });
     this.completion = null;
     this._syncToServer('accept_completion');
     return true;
   }
 
   replaceWithCorrected(c) {
-    this.words = c.split(' ').map(function(w){ return w.toLowerCase(); });
+    this.words = c.split(' ').map(function (w) { return w.toLowerCase(); });
     this._syncToServer('replace_corrected', null, c);
   }
 
@@ -88,8 +85,8 @@ export class SentenceModel {
   _syncToServer(action, word, text) {
     word = word || null; text = text || null;
     fetch('/api/sentence', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ action:action, word:word, text:text })
-    }).catch(function(){});
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, word: word, text: text })
+    }).catch(function () { });
   }
 }

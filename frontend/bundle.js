@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-22T09:56:53.793Z
+// Built: 2026-04-22T15:19:35.634Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -20,38 +20,40 @@ var APP_CONFIG = {
     STATIC_HIDDEN:       [256, 128, 64],
     DYNAMIC_HIDDEN:      [256, 128, 64],
     LEARNING_RATE:       0.008,
-    TRAINING_EPOCHS:     300,
+    TRAINING_EPOCHS:     500,   // was 300 — more epochs = better convergence
     EPOCH_BATCH:         10,
     SAMPLES_PER_GESTURE: 35,
-    STATIC_INPUT:        41,    // holistic: 11+11+8+6+3+2 = 41
-    DYNAMIC_INPUT:       1845,  // 41 x 45 frames
+    STATIC_INPUT:        41,
+    DYNAMIC_INPUT:       1845,
     DYNAMIC_FRAMES:      45,
     FEATURE_VERSION:     '1.0',
   },
 
   RECOGNITION: {
     CONFIDENCE_THRESHOLD:  0.65,
-    // Time-based stability (ms) — replaces frame-count check
-    STABLE_MS_LETTER:      600,
-    STABLE_MS_WORD:        900,
-    STABLE_MS_NUMBER:      600,
-    // Separate cooldowns per gesture type
-    COOLDOWN_SAME_LETTER:  1200,
-    COOLDOWN_DIFF_LETTER:  400,
-    COOLDOWN_WORD:         1800,
+    // Stability hold — longer = fewer false triggers, more deliberate
+    STABLE_MS_LETTER:      750,   // was 600
+    STABLE_MS_WORD:        1100,  // was 900
+    STABLE_MS_NUMBER:      750,   // was 600
+    // Cooldowns — space out repeated recognitions
+    COOLDOWN_SAME_LETTER:  1600,  // was 1200
+    COOLDOWN_DIFF_LETTER:  550,   // was 400
+    COOLDOWN_WORD:         2200,  // was 1800 — prevents word bursts
     // Prediction rate limiting
-    PREDICT_EVERY_N:       3,    // predict 1 in every 3 frames = ~10fps
-    // Confidence smoothing
-    CONF_SMOOTH_WINDOW:    5,    // rolling average over N frames
+    PREDICT_EVERY_N:       3,
+    // Confidence smoothing — larger window = smoother, less jittery
+    CONF_SMOOTH_WINDOW:    7,     // was 5
     // Motion detection threshold for LSTM activation
     MOTION_THRESHOLD:      0.08,
     DYNAMIC_CONF_THRESH:   0.75,
     DWELL_TIME:            1500,
-    SPELL_PAUSE:           2000,
+    SPELL_PAUSE:           2200,  // was 2000
     // NLP debounce
-    NLP_DEBOUNCE_MS:       300,
-    // Ensemble voting: average last N probability vectors before confirming
-    ENSEMBLE_WINDOW:       5,
+    NLP_DEBOUNCE_MS:       400,   // was 300
+    // Ensemble voting — more history = more stable argmax
+    ENSEMBLE_WINDOW:       7,     // was 5
+    // TTS word-queue buffer — accumulate words before speaking (ms)
+    TTS_BUFFER_MS:         1800,
   },
 
   MEDIAPIPE: {
@@ -95,10 +97,10 @@ var APP_CONFIG = {
   SEQUENCE: { WINDOW_SIZE:45, MAX_HISTORY:20, DEFAULT_TIMEOUT:3000 },
 
   TABS_ADMIN: [
-    { id:'detect',    label:'✋ Detect'    },
-    { id:'train',     label:'🧠 Train'     },
-    { id:'sequences', label:'🔗 Sequences' },
-    { id:'settings',  label:'⚙ Settings'  },
+    { id:'detect',    label:'Detect'    },
+    { id:'train',     label:'Train'     },
+    { id:'sequences', label:'Sequences' },
+    { id:'settings',  label:'Settings'  },
   ],
 
   FINGER_NAMES:  ['Thumb','Index','Middle','Ring','Pinky'],
@@ -343,8 +345,8 @@ const Card = (title, body, style) =>
   `</div>`;
 
 const Toggle = (on, onclick) =>
-  `<div class="toggle" style="background:${on ? 'var(--g)' : 'var(--s2)'}" onclick="${onclick}">` +
-    `<div class="knob" style="background:${on ? 'var(--bg)' : 'var(--dm)'};left:${on ? '21px' : '3px'}"></div>` +
+  `<div class="toggle" onclick="${onclick}">` +
+    `<div class="knob" style="left:${on ? '21px' : '3px'}"></div>` +
   `</div>`;
 
 const Bar = (pct, color) =>
@@ -368,7 +370,7 @@ const LogEntry = (entry, opacity) => {
   return `<div class="log-entry" style="opacity:${opacity}">` +
     `<div class="fr g5">` +
       Badge(entry.gesture, 'g') +
-      (entry.combo ? Badge('⚡' + entry.combo, 'p') : '') +
+      (entry.combo ? Badge(entry.combo, 'p') : '') +
       (entry.model ? `<span style="font-size:8px;color:var(--dm)">[${entry.model}]</span>` : '') +
     `</div>` +
     `<div class="fr g5">` +
@@ -628,17 +630,14 @@ class GestureModel {
 
 
 // ═══ models/SentenceModel.js ═══
-// models/SentenceModel.js — v6.1 Phase 2B
-// Tracks gesture sequence alongside sentence for NLP personalisation
-// No optional-chaining — Safari 12 safe
 class SentenceModel {
   constructor() {
-    this.words           = [];
-    this.spelling        = '';
-    this.context         = [];
-    this.suggestions     = ['hello','I','please','help','thank'];
+    this.words = [];
+    this.spelling = '';
+    this.context = [];
+    this.suggestions = ['hello', 'I', 'please', 'help', 'thank'];
     this.wordSuggestions = [];
-    this.completion      = null;
+    this.completion = null;
     this.gestureSequence = []; // Phase 2B: tracks gestures used to build sentence
   }
 
@@ -677,19 +676,19 @@ class SentenceModel {
     }
   }
 
-  getSentence()     { return this.words.join(' '); }
-  getLastWord()     { return this.words[this.words.length - 1] || null; }
-  getWordCount()    { return this.words.length; }
-  getContextString(){ return this.context.slice(-20).join(' '); }
-  getRecentGestures(n){ return this.gestureSequence.slice(-(n || 5)); }
-  setSuggestions(s) { this.suggestions     = s || []; }
-  setCompletion(t)  { this.completion      = t; }
-  setWordSuggestions(s){ this.wordSuggestions = s || []; }
+  getSentence() { return this.words.join(' '); }
+  getLastWord() { return this.words[this.words.length - 1] || null; }
+  getWordCount() { return this.words.length; }
+  getContextString() { return this.context.slice(-20).join(' '); }
+  getRecentGestures(n) { return this.gestureSequence.slice(-(n || 5)); }
+  setSuggestions(s) { this.suggestions = s || []; }
+  setCompletion(t) { this.completion = t; }
+  setWordSuggestions(s) { this.wordSuggestions = s || []; }
 
-  addLetter(ch)  { this.spelling += ch.toLowerCase(); this._syncToServer('add_letter', ch); }
+  addLetter(ch) { this.spelling += ch.toLowerCase(); this._syncToServer('add_letter', ch); }
   removeLetter() { this.spelling = this.spelling.slice(0, -1); }
-  clearSpelling(){ this.spelling = ''; this.wordSuggestions = []; }
-  getSpelling()  { return this.spelling; }
+  clearSpelling() { this.spelling = ''; this.wordSuggestions = []; }
+  getSpelling() { return this.spelling; }
 
   acceptWordSuggestion(word) {
     this.addWord(word); this.spelling = ''; this.wordSuggestions = [];
@@ -698,14 +697,14 @@ class SentenceModel {
 
   acceptCompletion() {
     if (!this.completion) return false;
-    this.words = this.completion.split(' ').map(function(w){ return w.toLowerCase(); });
+    this.words = this.completion.split(' ').map(function (w) { return w.toLowerCase(); });
     this.completion = null;
     this._syncToServer('accept_completion');
     return true;
   }
 
   replaceWithCorrected(c) {
-    this.words = c.split(' ').map(function(w){ return w.toLowerCase(); });
+    this.words = c.split(' ').map(function (w) { return w.toLowerCase(); });
     this._syncToServer('replace_corrected', null, c);
   }
 
@@ -718,9 +717,9 @@ class SentenceModel {
   _syncToServer(action, word, text) {
     word = word || null; text = text || null;
     fetch('/api/sentence', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ action:action, word:word, text:text })
-    }).catch(function(){});
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, word: word, text: text })
+    }).catch(function () { });
   }
 }
 
@@ -852,6 +851,10 @@ var CameraService = (function() {
     this._lastHandsData = [];
     this._lastFaceLM    = null;
     this._lastPoseLM    = null;
+
+    // Recording trail — filled by AppController event handlers
+    this._isRecording    = false;
+    this._recordingTrail = []; // [{x, y}] canvas-normalised positions
 
     // Camera facing mode: 'user' (front) or 'environment' (back)
     this.facingMode = 'user';
@@ -1036,6 +1039,13 @@ var CameraService = (function() {
     var features = this._buildFeatureVector(handsData, results.faceLandmarks, results.poseLandmarks);
     this.lastFeatures = features;
 
+    // Record wrist trail during dynamic gesture recording
+    if (this._isRecording && handsData.length > 0) {
+      var wrist = handsData[0].lm[0]; // landmark 0 = wrist
+      this._recordingTrail.push({ x: wrist.x, y: wrist.y });
+      if (this._recordingTrail.length > 60) this._recordingTrail.shift();
+    }
+
     // Update hand badge
     var hb = document.getElementById('trainHandB') || document.getElementById('recogHandB');
     if (hb) {
@@ -1183,10 +1193,10 @@ var CameraService = (function() {
   };
 
   CameraService.prototype._correctHandedness = function(label) {
-    // Front camera is mirrored → flip handedness so dominant hand matches visual
-    // Back camera is NOT mirrored → keep MediaPipe's labels as-is
-    if (this.facingMode !== 'user') return label;
-    return label === 'Left' ? 'Right' : 'Left';
+    // MediaPipe identifies hands anatomically (Right = right hand, Left = left hand)
+    // regardless of camera orientation — use labels as-is so the dominant (Right) hand
+    // always maps to feature slots 0-10 and the finger curl bars update correctly.
+    return label;
   };
 
   // ── Skeleton drawing ─────────────────────────────────────────
@@ -1230,6 +1240,26 @@ var CameraService = (function() {
 
     if (results.leftHandLandmarks)  drawHand(results.leftHandLandmarks);
     if (results.rightHandLandmarks) drawHand(results.rightHandLandmarks);
+
+    // Draw hand movement trail during dynamic recording
+    if (self._isRecording && self._recordingTrail.length > 1) {
+      var trail = self._recordingTrail;
+      for (var ti = 1; ti < trail.length; ti++) {
+        var alpha = ti / trail.length;
+        ctx.beginPath();
+        ctx.moveTo(trail[ti - 1].x * canvas.width, trail[ti - 1].y * canvas.height);
+        ctx.lineTo(trail[ti].x * canvas.width, trail[ti].y * canvas.height);
+        ctx.strokeStyle = 'rgba(206,79,104,' + (alpha * 0.85) + ')';
+        ctx.lineWidth   = 3 * alpha;
+        ctx.stroke();
+      }
+      // Draw a dot at the latest position
+      var last = trail[trail.length - 1];
+      ctx.beginPath();
+      ctx.arc(last.x * canvas.width, last.y * canvas.height, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ce4f68';
+      ctx.fill();
+    }
 
     // Draw pose skeleton (just shoulders + arms)
     if (results.poseLandmarks) {
@@ -1572,22 +1602,32 @@ class NLPService {
 
 // ═══ services/TTSService.js ═══
 // services/TTSService.js
+// Human-sounding TTS: best-voice selection + word-queue buffering
+// Word queue: accumulates recognised words for TTS_BUFFER_MS before speaking,
+// so "Hello" + "World" signed quickly are spoken as "Hello World" not two
+// separate choppy utterances.
 class TTSService {
   constructor() {
-    this.enabled    = true;
-    this.autoSpeak  = true;
-    this.rate       = 1;
-    this._unlocked  = false;
-    // iOS / Android require a user gesture before speechSynthesis will work.
-    // We fire a silent utterance on the first touch/click to unlock the API.
+    this.enabled   = true;
+    this.autoSpeak = true;
+    this.rate      = 1.0;   // user-controlled multiplier
+    this._unlocked = false;
+    this._voice    = null;
+
+    // Word-queue state
+    this._wordQueue  = [];
+    this._wordTimer  = null;
+    this._bufferMs   = (APP_CONFIG.RECOGNITION && APP_CONFIG.RECOGNITION.TTS_BUFFER_MS) || 1800;
+
     var self = this;
+
+    // iOS / Android require a user gesture before speechSynthesis works.
     var unlock = function() {
       if (self._unlocked || !window.speechSynthesis) return;
       try {
         var u = new SpeechSynthesisUtterance('');
         u.volume = 0;
         window.speechSynthesis.speak(u);
-        // Cancel after a tick — just needed to warm up the engine
         setTimeout(function() {
           try { window.speechSynthesis.cancel(); } catch(e) {}
         }, 100);
@@ -1598,18 +1638,84 @@ class TTSService {
     };
     document.addEventListener('touchend', unlock, { once: true, passive: true });
     document.addEventListener('click',    unlock, { once: true });
+
+    // Voice selection — fires after voices list loads (async on Chrome)
+    function _pickVoice() {
+      if (!window.speechSynthesis) return;
+      var voices = window.speechSynthesis.getVoices();
+      if (!voices || voices.length === 0) return;
+
+      // Priority list — neural / natural voices first
+      var prefer = [
+        'Google US English',
+        'Microsoft Aria Online (Natural)',
+        'Microsoft Jenny Online (Natural)',
+        'Microsoft Guy Online (Natural)',
+        'Samantha',          // macOS / iOS
+        'Alex',              // macOS
+        'Google UK English Female',
+        'Google UK English Male',
+        'Microsoft David',
+        'Microsoft Zira',
+      ];
+
+      var picked = null;
+      for (var pi = 0; pi < prefer.length && !picked; pi++) {
+        for (var vi = 0; vi < voices.length; vi++) {
+          if (voices[vi].name.indexOf(prefer[pi]) !== -1) {
+            picked = voices[vi];
+            break;
+          }
+        }
+      }
+
+      // Fall back: any English voice
+      if (!picked) {
+        for (var fi = 0; fi < voices.length; fi++) {
+          if (voices[fi].lang && voices[fi].lang.indexOf('en') === 0) {
+            picked = voices[fi];
+            break;
+          }
+        }
+      }
+
+      if (!picked && voices.length > 0) picked = voices[0];
+      self._voice = picked;
+    }
+
+    if (window.speechSynthesis) {
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = _pickVoice;
+      }
+      // Also try immediately (Firefox returns voices synchronously)
+      setTimeout(_pickVoice, 80);
+    }
   }
 
-  speak(t) {
-    if (!this.enabled || !t || !window.speechSynthesis) return;
+  // ── Speak a text string immediately ───────────────────────────────
+  speak(text) {
+    if (!this.enabled || !text || !window.speechSynthesis) return;
+
+    // Clean up the text a bit — capitalise first letter, add period if missing
+    var t = text.trim();
+    if (t.length > 0) {
+      t = t.charAt(0).toUpperCase() + t.slice(1);
+      if (!/[.!?]$/.test(t)) t += '.';
+    }
+
     window.speechSynthesis.cancel();
+
     var u = new SpeechSynthesisUtterance(t);
-    u.rate = this.rate;
-    // On some mobile browsers speak() must be called in a microtask
-    // after user-gesture unlock — a short delay makes it reliable
+
+    // Human-sounding parameters
+    u.rate  = this.rate * 0.92;   // ~8% slower than default — gives listener time to follow
+    u.pitch = 1.08;               // slightly above neutral — sounds less robotic
+    u.volume = 1.0;
+
+    if (this._voice) u.voice = this._voice;
+
     var self = this;
     if (!self._unlocked) {
-      // Queue and wait for unlock; will fire once user taps
       setTimeout(function() {
         try { window.speechSynthesis.cancel(); window.speechSynthesis.speak(u); } catch(e) {}
       }, 300);
@@ -1618,23 +1724,53 @@ class TTSService {
     }
   }
 
-  speakIfAuto(t) { if (this.autoSpeak) this.speak(t); }
-  stop()         { if (window.speechSynthesis) try { window.speechSynthesis.cancel(); } catch(e) {} }
-  setRate(r)     { this.rate = Math.max(0.5, Math.min(2, r)); }
+  // ── Auto-speak: buffer words, speak as a phrase after silence ────
+  // If another word arrives within TTS_BUFFER_MS, it joins the queue.
+  // This prevents choppy word-by-word speech when signing quickly.
+  speakIfAuto(word) {
+    if (!this.autoSpeak || !word) return;
+    var self = this;
+
+    this._wordQueue.push(word);
+
+    if (this._wordTimer) clearTimeout(this._wordTimer);
+    this._wordTimer = setTimeout(function() {
+      var phrase = self._wordQueue.join(' ');
+      self._wordQueue  = [];
+      self._wordTimer  = null;
+      self.speak(phrase);
+    }, this._bufferMs);
+  }
+
+  // ── Flush the word queue immediately (called by speakSentence) ───
+  flushQueue() {
+    if (this._wordTimer) {
+      clearTimeout(this._wordTimer);
+      this._wordTimer = null;
+    }
+    if (this._wordQueue.length > 0) {
+      var phrase = this._wordQueue.join(' ');
+      this._wordQueue = [];
+      this.speak(phrase);
+    }
+  }
+
+  stop()     { if (window.speechSynthesis) try { window.speechSynthesis.cancel(); } catch(e) {} }
+  setRate(r) { this.rate = Math.max(0.5, Math.min(2, r)); }
 }
 
 
 // ═══ views/AppView.js ═══
 // views/AppView.js
-var AppView = (function() {
+var AppView = (function () {
   function AppView(root, ctrl) {
     this.root = root;
     this.ctrl = ctrl;
   }
 
-  AppView.prototype.render = function() {
+  AppView.prototype.render = function () {
     var state = this.ctrl.getState();
-    var html  = '';
+    var html = '';
 
     if (state.mode === 'user') {
       html = renderUserMode(state);
@@ -1653,23 +1789,25 @@ var AppView = (function() {
 })();
 
 function _renderHeader(state) {
-  var camBadge    = state.camActive ? '<span class="bg bg-g"><span class="dot dot-g dot-pulse"></span>Live</span>' : '';
-  var modelBadge  = (state.staticTrained || state.dynamicTrained)
-    ? '<span class="bg bg-g">Model ready</span>'
-    : '<span class="bg bg-d">No model</span>';
-  var geminiBadge = state.geminiEnabled ? '<span class="bg bg-a">Gemini</span>' : '';
+  var trained = state.staticTrained || state.dynamicTrained;
+  var modelBadge = trained
+    ? '<span class="bg bg-g">model ready</span>'
+    : '';
+  var camBadge = state.camActive
+    ? '<span class="bg bg-g"><span class="dot dot-g dot-pulse"></span> live</span>'
+    : '';
+  var geminiBadge = state.geminiEnabled ? '<span class="bg bg-a">gemini</span>' : '';
 
   return '<div class="hdr">' +
     '<div>' +
-      '<div class="hdr-brand">✋ Gesture Detection</div>' +
-      '<div class="hdr-title">Hand Recognition <em>System</em></div>' +
+    '<div class="hdr-brand">gesture detection</div>' +
+    '<div class="hdr-title">Sign Language <em>Recognition</em></div>' +
     '</div>' +
-    '<div class="hdr-badges">' +
-      camBadge +
-      modelBadge +
-      geminiBadge +
+    '<div class="hdr-badges">' + camBadge + modelBadge + geminiBadge +
+    '<button class="btn btn-o btn-sm" onclick="window._app.switchMode(\'user\')" title="Back to user view" ' +
+      'style="font-size:11px;padding:4px 9px;border-color:var(--brd);color:var(--mx)">User View</button>' +
     '</div>' +
-  '</div>';
+    '</div>';
 }
 
 function _renderTabs(state) {
@@ -1686,11 +1824,11 @@ function _renderTabs(state) {
 
 function _renderTabContent(state) {
   switch (state.tab) {
-    case 'detect':    return renderDetectTab(state);
-    case 'train':     return renderTrainTab(state);
+    case 'detect': return renderDetectTab(state);
+    case 'train': return renderTrainTab(state);
     case 'sequences': return renderSequenceTab(state);
-    case 'settings':  return renderSettingsTab(state);
-    default:          return renderDetectTab(state);
+    case 'settings': return renderSettingsTab(state);
+    default: return renderDetectTab(state);
   }
 }
 
@@ -1708,7 +1846,7 @@ function renderDetectTab(state) {
 
   return (
     _renderCamera(state, camActive, cameraError, running, trained, inputMode, contextState) +
-    Card('Finger Curl', FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS)) +
+    Card('Finger Curl Sensor', FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS)) +
     _renderSentenceBuilder(state, displayText, spelling, suggestions, wordSuggestions, completion, geminiEnabled) +
     (trained ? _renderQuickTest(gestures) : '') +
     (log.length ? _renderLog(log) : '')
@@ -1723,47 +1861,47 @@ function _renderCamera(state, camActive, cameraError, running, trained, inputMod
         '<span class="bg bg-g" id="fpsB">-- FPS</span>' +
         '<span class="bg bg-d" id="handB">No Hand</span>' +
       '</div>' +
-      '<div class="vid-gesture" id="gestDisp" style="display:none">' +
-        '<div class="gesture-name" id="gestName"></div>' +
-        '<div class="gesture-conf" id="gestConf"></div>' +
-      '</div>' +
-      (!camActive ? '<div class="vid-overlay"><div style="font-size:36px">📷</div><div style="font-size:10px;letter-spacing:.12em">START CAMERA</div></div>' : '') +
+      (!camActive ? '<div class="vid-overlay"><div style="font-size:11px;color:var(--mx);margin-top:4px">tap start camera</div></div>' : '') +
     '</div>' +
 
-    // system gesture progress bar
     '<div style="height:3px;background:var(--s2);position:relative;margin-bottom:10px">' +
       '<div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div>' +
     '</div>' +
 
-    '<div class="fr fr-center mb8" style="gap:6px;flex-wrap:wrap">' +
+    '<div class="fr fr-center mb8" style="gap:8px;flex-wrap:wrap">' +
       (camActive
-        ? Btn('■ Stop Camera', 'window._app.stopCamera()', 'r', 'sm')
-        : Btn(cameraError ? '⚠ Retry Camera' : '📷 Start Camera', 'window._app.startCamera()', 'o', 'sm')) +
-      (camActive ? Btn('⇄ Flip', 'window._app.switchCamera()', 'o', 'sm') : '') +
+        ? Btn('Stop', 'window._app.stopCamera()', 'r', 'sm')
+        : Btn(cameraError ? 'Retry Camera' : 'Start Camera', 'window._app.startCamera()', 'o', 'sm')) +
+      (camActive ? Btn('Flip', 'window._app.switchCamera()', 'o', 'sm') : '') +
       (!running
-        ? Btn('▶ Recognize', 'window._app.startRecognition()', camActive ? 'g' : 'o', '', !trained)
-        : Btn('■ Stop', 'window._app.stopRecognition()', 'r')) +
-      '<select onchange="window._app.setInputMode(this.value)" style="background:var(--s2);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 9px;font-family:inherit;font-size:10px;font-weight:600">' +
-        '<option value="camera"' + (inputMode === 'camera' ? ' selected' : '') + '>📷 Camera</option>' +
-        '<option value="glove"'  + (inputMode === 'glove'  ? ' selected' : '') + '>🧤 Glove</option>' +
-        '<option value="both"'   + (inputMode === 'both'   ? ' selected' : '') + '>⚡ Both</option>' +
+        ? Btn('Recognize', 'window._app.startRecognition()', camActive ? 'g' : 'o', '', !trained)
+        : Btn('Stop', 'window._app.stopRecognition()', 'r')) +
+      '<select onchange="window._app.setInputMode(this.value)" style="background:var(--s2);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 9px;font-family:inherit;font-size:11px">' +
+        '<option value="camera"' + (inputMode === 'camera' ? ' selected' : '') + '>Camera</option>' +
+        '<option value="glove"' + (inputMode === 'glove' ? ' selected' : '') + '>Glove</option>' +
+        '<option value="both"' + (inputMode === 'both' ? ' selected' : '') + '>Both</option>' +
       '</select>' +
     '</div>' +
-    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:6px 10px;background:var(--rD);border-radius:6px;border:1px solid var(--r)">⚠ ' + cameraError + '</div>' : '');
 
-  var statusBadges = (running || camActive ? DotBadge('Active', 'g', running || camActive) : DotBadge('Idle', 'dm', false)) +
-    (contextState !== 'IDLE' ? ' ' + Badge(contextState, 'p') : '');
+    (cameraError ? '<div style="font-size:11px;color:var(--r);padding:8px 12px;background:var(--rD);border-radius:6px;border:1px solid var(--r);margin-bottom:8px">' + cameraError + '</div>' : '');
+
+  var statusBadge = running || camActive
+    ? DotBadge('Active', 'g', running || camActive)
+    : DotBadge('Idle', 'd', false);
+
+  var contextBadge = contextState !== 'IDLE' ? ' ' + Badge(contextState, 'p') : '';
 
   return Card(
-    '<span>Live Recognition</span><span class="flex"></span>' + statusBadges,
+    '<span>Live Recognition</span><span class="flex"></span>' + statusBadge + contextBadge,
     cameraContent,
     'position:relative;overflow:hidden'
   );
 }
 
 function _renderSentenceBuilder(state, displayText, spelling, suggestions, wordSuggestions, completion, geminiEnabled) {
-  var titleRight = (geminiEnabled ? Badge('Gemini AI', 'a') : Badge('Local', 'd')) +
-    ' ' + Btn('🔊', 'window._app.speakSentence()', 'o', 'sm', !state.sentence);
+  var titleRight =
+    (geminiEnabled ? Badge('Gemini AI', 'a') : Badge('Local NLP', 'd')) +
+    ' ' + Btn('Speak', 'window._app.speakSentence()', 'o', 'sm', !state.sentence);
 
   var body =
     '<div class="sent-box' + (displayText ? '' : ' empty') + '">' +
@@ -1771,47 +1909,45 @@ function _renderSentenceBuilder(state, displayText, spelling, suggestions, wordS
       '<span class="cursor"></span>' +
     '</div>' +
 
-    (spelling ? '<div style="font-size:10px;color:var(--p);margin-bottom:6px">SPELLING: <strong>' + spelling.toUpperCase() + '_</strong></div>' : '') +
+    (spelling ? '<div style="font-size:11px;color:var(--p);margin-bottom:8px">Spelling: <strong>' + spelling.toUpperCase() + '_</strong></div>' : '') +
 
     (wordSuggestions.length
-      ? '<div class="mb8">' +
-          '<div style="font-size:9px;color:var(--a);letter-spacing:.1em;margin-bottom:4px">WORD MATCHES</div>' +
-          '<div class="suggs">' +
-            wordSuggestions.map(function(w, i) {
-              return '<span class="sugg ai" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
-                '<span style="font-size:8px;opacity:.5">' + (i + 1) + '</span> ' + w +
-              '</span>';
-            }).join('') +
-          '</div>' +
-        '</div>'
+      ? '<div class="mb8"><div style="font-size:10px;color:var(--mx);margin-bottom:5px">Word matches</div>' +
+        '<div class="suggs">' +
+        wordSuggestions.map(function(w, i) {
+          return '<span class="sugg ai" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
+            '<span style="opacity:.5;font-size:9px">' + (i + 1) + '</span> ' + w +
+            '</span>';
+        }).join('') +
+        '</div></div>'
       : '') +
 
     (completion && completion !== state.sentence
       ? '<div class="completion" onclick="window._app.acceptCompletion()">' +
-          '<div class="completion-label">✨ Gemini suggests</div>' +
+          '<div class="completion-label">Gemini suggests</div>' +
           '<div class="completion-text">"' + completion + '"</div>' +
         '</div>'
       : '') +
 
-    '<div style="font-size:9px;color:var(--mx);letter-spacing:.1em;margin-bottom:6px">' +
-      (geminiEnabled ? 'AI' : 'LOCAL') + ' NEXT WORD' +
+    '<div style="font-size:10px;color:var(--mx);margin-bottom:7px">' +
+      (geminiEnabled ? 'AI' : 'Local') + ' next word predictions' +
     '</div>' +
     '<div class="suggs">' +
       suggestions.map(function(w, i) {
         return '<span class="sugg' + (geminiEnabled ? ' ai' : '') + '" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
-          '<span style="font-size:8px;opacity:.5">' + (i + 1) + '</span> ' + w +
-        '</span>';
+          '<span style="opacity:.5;font-size:9px">' + (i + 1) + '</span> ' + w +
+          '</span>';
       }).join('') +
     '</div>' +
 
     '<div class="fr fr-end g6 mt8">' +
-      (geminiEnabled && state.sentence ? Btn('✨ Fix Grammar', 'window._app.fixGrammar()', 'ghost', 'sm') : '') +
-      Btn('↩ Undo', 'window._app.undoWord()', 'ghost', 'sm') +
-      Btn('✕ Clear', 'window._app.clearSentence()', 'ghost', 'sm') +
+      (geminiEnabled && state.sentence ? Btn('Fix Grammar', 'window._app.fixGrammar()', 'ghost', 'sm') : '') +
+      Btn('Undo', 'window._app.undoWord()', 'ghost', 'sm') +
+      Btn('Clear', 'window._app.clearSentence()', 'ghost', 'sm') +
     '</div>' +
 
-    '<div style="font-size:8px;color:var(--dm);margin-top:8px">' +
-      '✊ Hold fist = Speak · 🖐 Open palm = Clear · 👎 Thumbs down = Backspace · Hold 1–5 fingers = Select suggestion' +
+    '<div style="font-size:10px;color:var(--dm);margin-top:10px;line-height:1.7">' +
+      'Fist = Speak &nbsp;·&nbsp; Open palm = Clear &nbsp;·&nbsp; Thumbs down = Backspace' +
     '</div>';
 
   return Card(
@@ -1833,7 +1969,7 @@ function _renderQuickTest(gestures) {
 
 function _renderLog(log) {
   return Card(
-    'Recognition Log',
+    'Recent Detections',
     '<div style="max-height:180px;overflow-y:auto">' +
       log.slice(0, 15).map(function(entry, i) {
         return LogEntry(entry, 1 - i * 0.05);
@@ -1966,7 +2102,7 @@ function _renderCameraStrip(state, liveP, countdown) {
   } else {
     livePredHTML =
       '<div style="font-size:8px;color:var(--dm);margin-top:4px">' +
-        (state.camActive ? '✓ Camera active' : '⏳ Waiting…') +
+        (state.camActive ? 'Camera active' : 'Waiting…') +
         ((state.staticTrained || state.dynamicTrained) ? ' · live prediction ON' : ' · train model to enable') +
       '</div>';
   }
@@ -1980,7 +2116,7 @@ function _renderCameraStrip(state, liveP, countdown) {
         '<div style="position:relative;width:180px;min-height:130px;border-radius:8px;overflow:hidden;background:var(--s1);border:1px solid ' + (state.recording ? 'var(--r)' : 'var(--brd)') + ';flex-shrink:0">' +
           '<div id="trainVidContainer" style="width:100%;height:100%;min-height:130px"></div>' +
           (!state.camActive
-            ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:22px">📷</div><div style="font-size:8px">Loading…</div></div>'
+            ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:8px">Loading…</div></div>'
             : '') +
           (state.recording
             ? '<div style="position:absolute;top:5px;right:5px"><span class="bg bg-r" style="font-size:8px"><span class="dot dot-r dot-pulse"></span>REC</span></div>'
@@ -2000,13 +2136,26 @@ function _renderCameraStrip(state, liveP, countdown) {
           livePredHTML +
         '</div>' +
       '</div>' +
+
+      (state.recording
+        ? '<div style="margin-top:10px">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">' +
+              '<span style="font-size:10px;color:var(--r);font-weight:600">● Recording movement…</span>' +
+              '<span id="recProgLabel" style="font-size:10px;color:var(--mx)">0 / 45 frames</span>' +
+            '</div>' +
+            '<div style="height:5px;background:var(--s2);border-radius:3px;overflow:hidden">' +
+              '<div id="recProgBar" style="height:100%;width:0%;background:var(--r);border-radius:3px;transition:width .08s"></div>' +
+            '</div>' +
+          '</div>'
+        : '') +
+
     '</div>' +
   '</div>';
 }
 
 function _renderRetrainAlert(newSince) {
   return '<div style="padding:10px 14px;background:var(--aD);border:1px solid var(--a);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:10px;flex-wrap:wrap">' +
-    '<span style="font-size:16px">⚠️</span>' +
+    '<span style="font-size:12px;font-weight:700;color:var(--a)">!</span>' +
     '<div style="flex:1"><strong style="color:var(--a)">' + newSince + ' new samples</strong> since last training — model is outdated.</div>' +
     Btn('Retrain Now', 'window._app.trainModel()', 'a', 'sm') +
   '</div>';
@@ -2024,7 +2173,7 @@ function _renderModelStats(trainStats) {
 
   return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
     '<div class="cd" style="margin-bottom:0">' +
-      '<div class="cd-label">🧠 Static MLP ' + (sTrained ? '<span class="bg bg-g" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
+      '<div class="cd-label">Static MLP ' + (sTrained ? '<span class="bg bg-g" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
         StatBox((sAcc * 100).toFixed(1) + '%', 'Acc', 'var(--g)') +
         StatBox(sLoss.toFixed(3), 'Loss', 'var(--p)') +
@@ -2032,7 +2181,7 @@ function _renderModelStats(trainStats) {
       '</div>' +
     '</div>' +
     '<div class="cd" style="margin-bottom:0">' +
-      '<div class="cd-label">🔄 LSTM Dyn ' + (dTrained ? '<span class="bg bg-p" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
+      '<div class="cd-label">LSTM Dyn ' + (dTrained ? '<span class="bg bg-p" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
         StatBox((dAcc * 100).toFixed(1) + '%', 'Acc', 'var(--g)') +
         StatBox(dLoss.toFixed(3), 'Loss', 'var(--p)') +
@@ -2044,20 +2193,20 @@ function _renderModelStats(trainStats) {
 
 function _renderTrainingProgress(progress) {
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">⚡ Training… ' + Math.round(progress) + '%</div>' +
+    '<div class="cd-label">Training… ' + Math.round(progress) + '%</div>' +
     Bar(progress) +
   '</div>';
 }
 
 function _renderControls(isTraining, confThresh, readyCount, totalCount) {
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">⚙ Controls</div>' +
+    '<div class="cd-label">Controls</div>' +
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' +
-      Btn('📦 Demo Data',   'window._app.generateDemoData()', 'a', 'sm') +
-      Btn(isTraining ? '⏳ Training…' : '🚀 Train Models', 'window._app.trainModel()', 'g', '', isTraining) +
-      Btn('🗑 Delete Model', 'window._app.deleteModel()', 'r', 'sm', isTraining) +
-      Btn('📤 Export',       'window._app.exportDataset()', 'o', 'sm') +
-      '<label class="btn btn-o btn-sm" style="cursor:pointer">📥 Import' +
+      Btn('Demo Data',   'window._app.generateDemoData()', 'a', 'sm') +
+      Btn(isTraining ? 'Training…' : 'Train Models', 'window._app.trainModel()', 'g', '', isTraining) +
+      Btn('Delete Model', 'window._app.deleteModel()', 'r', 'sm', isTraining) +
+      Btn('Export',       'window._app.exportDataset()', 'o', 'sm') +
+      '<label class="btn btn-o btn-sm" style="cursor:pointer">Import' +
         '<input type="file" accept=".json" style="display:none" onchange="window._app.importDataset(this.files[0])">' +
       '</label>' +
     '</div>' +
@@ -2081,10 +2230,10 @@ function _renderSourceSelector(src) {
     (gloveActive ? 'var(--p)' : 'var(--brd)') + ';background:' + (gloveActive ? 'var(--pD)' : 'var(--s1)') + ';color:' + (gloveActive ? 'var(--p)' : 'var(--mx)');
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">📡 Data Source</div>' +
+    '<div class="cd-label">Data Source</div>' +
     '<div style="display:flex;gap:8px">' +
-      '<button style="' + camStyle   + '" onclick="window._app.setTrainSource(\'camera\')">📷 Camera</button>' +
-      '<button style="' + gloveStyle + '" onclick="window._app.setTrainSource(\'glove\')">🧤 Glove / MQTT</button>' +
+      '<button style="' + camStyle   + '" onclick="window._app.setTrainSource(\'camera\')">Camera</button>' +
+      '<button style="' + gloveStyle + '" onclick="window._app.setTrainSource(\'glove\')">Glove / MQTT</button>' +
     '</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-top:6px">' +
       (camActive ? 'Recording from webcam landmarks' : 'Recording from sensor glove via MQTT') +
@@ -2094,7 +2243,7 @@ function _renderSourceSelector(src) {
 
 function _renderSectionTabs(section) {
   var tabs      = ['alphabet', 'numbers', 'words', 'custom'];
-  var tabLabels = {alphabet: '🔤 A–Z', numbers: '🔢 0–9', words: '💬 Words', custom: '✏️ Custom'};
+  var tabLabels = {alphabet: 'A–Z', numbers: '0–9', words: 'Words', custom: 'Custom'};
   var html = '<div class="section-tabs">';
   for (var ti = 0; ti < tabs.length; ti++) {
     var s = tabs[ti];
@@ -2129,7 +2278,7 @@ function _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained) {
   }
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">📊 Per-Gesture Accuracy</div>' +
+    '<div class="cd-label">Per-Gesture Accuracy</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-bottom:8px">Below 70% = needs more samples</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:5px">' +
       rows +
@@ -2144,7 +2293,7 @@ function _renderSessionHistory(histStats) {
   var lastTrain     = _get(histStats, 'lastTrainAt',   null);
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🕐 Session History</div>' +
+    '<div class="cd-label">Session History</div>' +
     '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">' +
       '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--g)">'  + totalCaptures + '</div><div style="font-size:8px;color:var(--mx)">Captures</div></div>' +
       '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--p)">'  + totalTrains   + '</div><div style="font-size:8px;color:var(--mx)">Trains</div></div>' +
@@ -2163,7 +2312,7 @@ function _renderNlpCard(nlpStats) {
   var nlpPersonal = nlpStats.personal_model_active ? true : false;
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🧠 Adaptive NLP ' +
+    '<div class="cd-label">Adaptive NLP ' +
       (nlpPersonal
         ? '<span class="bg bg-g" style="font-size:8px">Personal Model Active</span>'
         : '<span class="bg bg-d" style="font-size:8px">Building…</span>') +
@@ -2175,11 +2324,11 @@ function _renderNlpCard(nlpStats) {
         '<div style="font-size:8px;color:var(--mx)">Sentences Learned</div>' +
       '</div>' +
       '<div style="text-align:center;padding:8px;background:var(--s1);border-radius:8px">' +
-        '<div style="font-size:18px;font-weight:700;color:' + (nlpPersonal ? 'var(--g)' : 'var(--dm)') + '">' + (nlpPersonal ? '✓' : '✗') + '</div>' +
+        '<div style="font-size:18px;font-weight:700;color:' + (nlpPersonal ? 'var(--g)' : 'var(--dm)') + '">' + (nlpPersonal ? 'Yes' : 'No') + '</div>' +
         '<div style="font-size:8px;color:var(--mx)">Personal Model</div>' +
       '</div>' +
       '<div style="text-align:center;padding:8px;background:var(--s1);border-radius:8px">' +
-        '<div style="font-size:18px;font-weight:700;color:var(--a)">' + (nlpCorpus >= 5 ? '✓' : nlpCorpus + '/5') + '</div>' +
+        '<div style="font-size:18px;font-weight:700;color:var(--a)">' + (nlpCorpus >= 5 ? 'OK' : nlpCorpus + '/5') + '</div>' +
         '<div style="font-size:8px;color:var(--mx)">Min 5 to Activate</div>' +
       '</div>' +
     '</div>' +
@@ -2191,10 +2340,10 @@ function _renderNlpCard(nlpStats) {
 
 function _renderAlpha(meta, readiness, guided) {
   var html = '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🔤 Alphabet A–Z <span class="flex"></span>' +
-      Btn('🎯 Guided', 'window._app.startGuidedMode(\'alphabet\')', 'p', 'sm') +
+    '<div class="cd-label">Alphabet A–Z <span class="flex"></span>' +
+      Btn('Guided', 'window._app.startGuidedMode(\'alphabet\')', 'p', 'sm') +
     '</div>' +
-    '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">📸 = static · 🎬 = dynamic motion (J, Z) · 🗑 = delete samples</div>' +
+    '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">Static = fixed pose · Dynamic = motion (J, Z) · Delete = remove samples</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:5px">';
   for (var i = 0; i < ALPHA.length; i++) {
     var lt = ALPHA[i];
@@ -2205,7 +2354,7 @@ function _renderAlpha(meta, readiness, guided) {
 
 function _renderNums(meta, readiness) {
   var html = '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🔢 Numbers 0–9</div>' +
+    '<div class="cd-label">Numbers 0–9</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">All digits are static hand poses.</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:5px">';
   for (var i = 0; i < NUMS.length; i++) {
@@ -2228,7 +2377,7 @@ function _renderWords(meta, readiness, gestures, customs) {
     if (!alphaSet[g] && !numSet[g] && !customSet[g]) words.push(g);
   }
 
-  var html = '<div class="cd" style="margin-bottom:12px"><div class="cd-label">💬 Word Gestures</div>';
+  var html = '<div class="cd" style="margin-bottom:12px"><div class="cd-label">Word Gestures</div>';
   if (words.length === 0) {
     html += '<div style="font-size:10px;color:var(--dm);padding:10px 0">No word gestures. Generate demo data to add some.</div>';
   } else {
@@ -2241,7 +2390,7 @@ function _renderWords(meta, readiness, gestures, customs) {
 
 function _renderCustom(meta, readiness, customs) {
   var html = '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">✏️ Custom Gestures</div>' +
+    '<div class="cd-label">Custom Gestures</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">Add your own static pose or dynamic motion gesture.</div>' +
     '<div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">' +
       '<input class="inp" id="newGInput" placeholder="Gesture name…" style="flex:1;min-width:100px" ' +
@@ -2294,10 +2443,10 @@ function _card(name, meta, readiness, defaultType, isGuided) {
       : '<div style="height:14px"></div>') +
     '<div style="display:flex;gap:3px;justify-content:center">' +
       (isDyn
-        ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">🎬</button>'
-        : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">📸</button>') +
+        ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Rec</button>'
+        : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Add</button>') +
       (count > 0
-        ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">🗑</button>'
+        ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">Del</button>'
         : '') +
     '</div>' +
   '</div>';
@@ -2319,19 +2468,19 @@ function _wideCard(name, meta, readiness, isCustom) {
         '<span class="bg ' + (isDyn ? 'bg-p' : 'bg-g') + '" style="font-size:7px">' + (isDyn ? 'DYN' : 'STA') + '</span>' +
       '</div>' +
       (isCustom
-        ? '<button style="padding:3px 7px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:5px;cursor:pointer" onclick="window._app.deleteGesture(\'' + esc(name) + '\')">✕</button>'
+        ? '<button style="padding:3px 7px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:5px;cursor:pointer" onclick="window._app.deleteGesture(\'' + esc(name) + '\')">Del</button>'
         : '') +
     '</div>' +
-    '<div style="font-size:8px;color:var(--mx);margin-bottom:5px">📸 ' + sc + ' static · 🎬 ' + dc + ' dynamic</div>' +
+    '<div style="font-size:8px;color:var(--mx);margin-bottom:5px">' + sc + ' static · ' + dc + ' dynamic</div>' +
     '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px">' +
       pBar(isDyn ? dc : sc, isDyn ? 5 : 10, ready ? 'var(--g)' : 'var(--a)') +
-      '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + (ready ? '✓ Ready' : 'Need ' + needed) + '</span>' +
+      '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + (ready ? 'Ready' : 'Need ' + needed) + '</span>' +
     '</div>' +
     '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
-      '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">📸 Static</button>' +
-      '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">🎬 Dynamic</button>' +
+      '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Static</button>' +
+      '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Dynamic</button>' +
       (sc + dc > 0
-        ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">🗑</button>'
+        ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">Del</button>'
         : '') +
     '</div>' +
   '</div>';
@@ -2354,7 +2503,7 @@ function renderSequenceTab(state) {
 
 function _renderIntro() {
   return Card(
-    '🔗 Gesture Combos',
+    'Gesture Combos',
     '<div style="font-size:12px;color:var(--mx);line-height:1.7">' +
       '<strong style="color:var(--g)">Combos</strong> fire when you sign a specific sequence of gestures. ' +
       'The <strong style="color:var(--p)">dynamic model</strong> handles motion-based gestures like J and Z.' +
@@ -2376,7 +2525,7 @@ function _renderBuilder(gestures, seq) {
         seq.map(function(g, i) {
           return Badge(g, 'p') + (i < seq.length - 1 ? '<span style="color:var(--dm)">→</span>' : '');
         }).join('') +
-        '<button class="btn btn-ghost btn-sm" onclick="window._comboSeq=[];window._app.switchTab(\'sequences\')">✕ clear</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="window._comboSeq=[];window._app.switchTab(\'sequences\')">clear</button>' +
       '</div>'
     : '<div style="font-size:10px;color:var(--dm);margin-bottom:8px">Tap gestures above to build a sequence (min 2).</div>';
 
@@ -2448,16 +2597,16 @@ function _renderGeminiCard(apiKey, apiStatus) {
   var gemFn = "(async function(){await window._app.connectGemini(document.getElementById('apiKeyInput').value)})()";
 
   return Card(
-    '✨ Gemini AI',
+    'Gemini AI',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
       'Next-word suggestions, grammar correction, sentence completion. ' +
       'Get a free key at <span style="color:var(--g)">aistudio.google.com</span>.' +
     '</div>' +
     '<div class="fr g6 mb8">' +
       '<input class="inp f1" id="apiKeyInput" type="password" placeholder="Paste API key…" value="' + apiKey + '">' +
-      Btn(isConnected ? '✓ Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
+      Btn(isConnected ? 'Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
     '</div>' +
-    (isConnected ? '<div style="font-size:10px;color:var(--g)">✓ Gemini is active</div>' : ''),
+    (isConnected ? '<div style="font-size:10px;color:var(--g)">Gemini is active</div>' : ''),
     'border-color:' + borderColor
   );
 }
@@ -2468,7 +2617,7 @@ function _renderMQTTCard(connected, broker, topic) {
     : '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dm);margin-right:5px"></span>';
 
   return Card(
-    '📡 MQTT Publish',
+    'MQTT Publish',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:10px">' +
       'Publish recognized gestures to any MQTT subscriber — Raspberry Pi, Arduino, another phone.' +
     '</div>' +
@@ -2481,7 +2630,7 @@ function _renderMQTTCard(connected, broker, topic) {
     ) +
     (connected
       ? '<div style="font-size:9px;color:var(--dm);margin-top:6px">Topic: <span style="color:var(--p)">' + topic + '</span></div>' +
-        '<div style="font-size:10px;color:var(--g);padding:6px 10px;background:var(--gD);border-radius:6px;margin-top:8px">✓ Publishing gestures to broker</div>'
+        '<div style="font-size:10px;color:var(--g);padding:6px 10px;background:var(--gD);border-radius:6px;margin-top:8px">Publishing gestures to broker</div>'
       : '<div style="font-size:9px;color:var(--dm);margin-top:8px">' +
           'Subscribe anywhere: <code style="color:var(--a)">mosquitto_sub -h broker.hivemq.com -t "' + (topic || 'gesture-detection/results/gesture') + '"</code>' +
         '</div>')
@@ -2490,7 +2639,7 @@ function _renderMQTTCard(connected, broker, topic) {
 
 function _renderCameraCard(camActive) {
   return Card(
-    '📷 Camera',
+    'Camera',
     SettingRow(
       'Live camera',
       'MediaPipe Holistic — hands + face + body',
@@ -2502,7 +2651,7 @@ function _renderCameraCard(camActive) {
 
 function _renderTTSCard(tts) {
   return Card(
-    '🔊 Text-to-Speech',
+    'Text-to-Speech',
     SettingRow('Enable TTS', '', Toggle(tts.enabled, 'window._app.setTTSEnabled(' + !tts.enabled + ')')) +
     SettingRow('Auto-speak on gesture', '', Toggle(tts.auto, 'window._app.setAutoSpeak(' + !tts.auto + ')')) +
     SettingRow(
@@ -2516,7 +2665,7 @@ function _renderTTSCard(tts) {
 
 function _renderRecognitionCard(confThresh) {
   return Card(
-    '🎯 Recognition',
+    'Recognition',
     SettingRow(
       'Confidence: ' + Math.round(confThresh * 100) + '%',
       'Minimum confidence before a gesture is accepted',
@@ -2531,13 +2680,13 @@ function _renderRecognitionCard(confThresh) {
 
 function _renderBackupCard() {
   return Card(
-    '💾 Data Backup',
+    'Data Backup',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
       'Export all training samples and settings to a JSON file. Import on any device.' +
     '</div>' +
     '<div class="fr g6 mb8">' +
-      Btn('⬇ Export', 'window._app.exportDataset()', 'g') +
-      Btn('⬆ Import', 'document.getElementById(\'importFileInput\').click()', 'o') +
+      Btn('Export', 'window._app.exportDataset()', 'g') +
+      Btn('Import', 'document.getElementById(\'importFileInput\').click()', 'o') +
     '</div>' +
     '<input type="file" id="importFileInput" accept=".json" style="display:none" ' +
       'onchange="window._app.importDataset(this.files[0]);this.value=\'\'">'
@@ -2546,7 +2695,7 @@ function _renderBackupCard() {
 
 function _renderAdminCard() {
   return Card(
-    '🔒 Admin',
+    'Admin',
     SettingRow(
       'Change PIN',
       '',
@@ -2559,7 +2708,7 @@ function _renderAdminCard() {
         '">Set</button>' +
       '</div>'
     ) +
-    SettingRow('Exit Admin', '', Btn('← User Mode', "window._app.switchMode('user')", 'o', 'sm'))
+    SettingRow('Exit Admin', '', Btn('User Mode', "window._app.switchMode('user')", 'o', 'sm'))
   );
 }
 
@@ -2585,15 +2734,15 @@ function renderUserMode(state) {
 }
 
 function _renderUserHeader(state) {
-  return '<div style="padding:12px 0 8px;display:flex;align-items:center;justify-content:space-between">' +
+  return '<div style="padding:14px 0 10px;display:flex;align-items:center;justify-content:space-between">' +
     '<div>' +
-      '<div style="font-size:9px;letter-spacing:.2em;color:var(--g);font-weight:700">✋ GESTURE DETECTION</div>' +
-      '<div style="font-size:15px;font-weight:700">Sign to <span style="color:var(--g)">Communicate</span></div>' +
+      '<div style="font-size:11px;color:var(--g);font-weight:600;margin-bottom:3px">gesture detection</div>' +
+      '<div style="font-size:16px;font-weight:700">Sign to <span style="color:var(--g)">Communicate</span></div>' +
     '</div>' +
     '<button class="btn btn-o btn-sm" ' +
       'onclick="document.getElementById(\'userSettings\').style.display=' +
         'document.getElementById(\'userSettings\').style.display===\'none\'?\'block\':\'none\'" ' +
-      'style="font-size:16px;padding:7px">⚙</button>' +
+      '>Settings</button>' +
   '</div>';
 }
 
@@ -2617,7 +2766,7 @@ function _renderUserSettings(state, inputMode) {
         'var pin=prompt(\'Enter admin PIN:\');' +
         'if(pin&&window._app.checkAdminPin(pin)){window._app.switchMode(\'admin\')}' +
         'else if(pin){alert(\'Wrong PIN\')}' +
-      '">🔒 Admin</button>' +
+      '">Admin</button>' +
     '</div>' +
   '</div>';
 }
@@ -2634,18 +2783,18 @@ function _renderUserCamera(camActive, cameraError, trained, running) {
         '<div class="gesture-name" id="gestName"></div>' +
         '<div class="gesture-conf" id="gestConf"></div>' +
       '</div>' +
-      (!camActive ? '<div class="vid-overlay"><div style="font-size:40px">✋</div><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
+      (!camActive ? '<div class="vid-overlay"><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
     '</div>' +
     '<div style="height:3px;background:var(--s2)"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>' +
   '</div>' +
 
   '<div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px;flex-wrap:wrap">' +
     (camActive
-      ? '<button class="btn btn-r" onclick="window._app.stopCamera()">■ Stop Camera</button>'
-      : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? '⚠ Retry Camera' : '📷 Start Camera') + '</button>') +
-    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">⚠ ' + cameraError + '</div>' : '') +
-    (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">▶ Recognize</button>' : '') +
-    (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">■ Stop</button>' : '') +
+      ? '<button class="btn btn-r" onclick="window._app.stopCamera()">Stop Camera</button>'
+      : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? 'Retry Camera' : 'Start Camera') + '</button>') +
+    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">' + cameraError + '</div>' : '') +
+    (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">Recognize</button>' : '') +
+    (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">Stop</button>' : '') +
   '</div>';
 }
 
@@ -2688,14 +2837,14 @@ function _renderUserSentence(state, displayText, spelling, suggestions, wordSugg
 
     (completion && completion !== state.sentence
       ? '<div class="completion" onclick="window._app.acceptCompletion()">' +
-          '<div class="completion-label">✨ AI suggests</div>' +
+          '<div class="completion-label">AI suggests</div>' +
           '<div class="completion-text">"' + completion + '"</div>' +
         '</div>'
       : '') +
 
     '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px">' +
       '<span style="font-size:9px;color:var(--dm);letter-spacing:.1em">' + contextState + ' ' + (state.geminiEnabled ? '· Gemini AI' : '') + '</span>' +
-      '<div style="font-size:9px;color:var(--dm)">✊=Speak · 🖐=Clear · 👎=Undo</div>' +
+      '<div style="font-size:9px;color:var(--dm)">Fist=Speak · Palm=Clear · Thumbs down=Undo</div>' +
     '</div>' +
   '</div>';
 }
@@ -3488,7 +3637,7 @@ class TrainingController {
         })
       });
 
-      var DYN_EPOCHS = 300, DYN_BATCH = 15;
+      var DYN_EPOCHS = 400, DYN_BATCH = 15;
       for (var dep = 0; dep < DYN_EPOCHS; dep += DYN_BATCH) {
         await new Promise(function(r){ setTimeout(r, 4); });
         var dep2 = Math.min(DYN_BATCH, DYN_EPOCHS - dep);
@@ -3666,6 +3815,26 @@ class AppController {
         if (tb) tb.style.width  = pct + '%';
         if (tv) tv.textContent  = pct + '%';
       }
+    });
+
+    // Update recording progress bar directly in DOM on each frame tick
+    eventBus.on(Events.RECORDING_TICK, function(d) {
+      var bar   = document.getElementById('recProgBar');
+      var label = document.getElementById('recProgLabel');
+      if (!d) return;
+      var pct = Math.round((d.frame / d.total) * 100);
+      if (bar)   bar.style.width = pct + '%';
+      if (label) label.textContent = d.frame + ' / ' + d.total + ' frames';
+    });
+
+    // Show / hide recording trail on canvas
+    eventBus.on(Events.RECORDING_START, function() {
+      self.camera._recordingTrail = [];
+      self.camera._isRecording    = true;
+    });
+    eventBus.on(Events.RECORDING_DONE, function() {
+      self.camera._isRecording    = false;
+      self.camera._recordingTrail = [];
     });
   }
 

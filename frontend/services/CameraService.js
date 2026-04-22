@@ -20,6 +20,10 @@ var CameraService = (function() {
     this._lastFaceLM    = null;
     this._lastPoseLM    = null;
 
+    // Recording trail — filled by AppController event handlers
+    this._isRecording    = false;
+    this._recordingTrail = []; // [{x, y}] canvas-normalised positions
+
     // Camera facing mode: 'user' (front) or 'environment' (back)
     this.facingMode = 'user';
     // Current live prediction for canvas overlay
@@ -203,6 +207,13 @@ var CameraService = (function() {
     var features = this._buildFeatureVector(handsData, results.faceLandmarks, results.poseLandmarks);
     this.lastFeatures = features;
 
+    // Record wrist trail during dynamic gesture recording
+    if (this._isRecording && handsData.length > 0) {
+      var wrist = handsData[0].lm[0]; // landmark 0 = wrist
+      this._recordingTrail.push({ x: wrist.x, y: wrist.y });
+      if (this._recordingTrail.length > 60) this._recordingTrail.shift();
+    }
+
     // Update hand badge
     var hb = document.getElementById('trainHandB') || document.getElementById('recogHandB');
     if (hb) {
@@ -350,10 +361,10 @@ var CameraService = (function() {
   };
 
   CameraService.prototype._correctHandedness = function(label) {
-    // Front camera is mirrored → flip handedness so dominant hand matches visual
-    // Back camera is NOT mirrored → keep MediaPipe's labels as-is
-    if (this.facingMode !== 'user') return label;
-    return label === 'Left' ? 'Right' : 'Left';
+    // MediaPipe identifies hands anatomically (Right = right hand, Left = left hand)
+    // regardless of camera orientation — use labels as-is so the dominant (Right) hand
+    // always maps to feature slots 0-10 and the finger curl bars update correctly.
+    return label;
   };
 
   // ── Skeleton drawing ─────────────────────────────────────────
@@ -397,6 +408,26 @@ var CameraService = (function() {
 
     if (results.leftHandLandmarks)  drawHand(results.leftHandLandmarks);
     if (results.rightHandLandmarks) drawHand(results.rightHandLandmarks);
+
+    // Draw hand movement trail during dynamic recording
+    if (self._isRecording && self._recordingTrail.length > 1) {
+      var trail = self._recordingTrail;
+      for (var ti = 1; ti < trail.length; ti++) {
+        var alpha = ti / trail.length;
+        ctx.beginPath();
+        ctx.moveTo(trail[ti - 1].x * canvas.width, trail[ti - 1].y * canvas.height);
+        ctx.lineTo(trail[ti].x * canvas.width, trail[ti].y * canvas.height);
+        ctx.strokeStyle = 'rgba(206,79,104,' + (alpha * 0.85) + ')';
+        ctx.lineWidth   = 3 * alpha;
+        ctx.stroke();
+      }
+      // Draw a dot at the latest position
+      var last = trail[trail.length - 1];
+      ctx.beginPath();
+      ctx.arc(last.x * canvas.width, last.y * canvas.height, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#ce4f68';
+      ctx.fill();
+    }
 
     // Draw pose skeleton (just shoulders + arms)
     if (results.poseLandmarks) {

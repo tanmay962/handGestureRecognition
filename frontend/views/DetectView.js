@@ -1,6 +1,6 @@
 // views/DetectView.js
-import {APP_CONFIG, GESTURE_TEMPLATES} from '../config/app.config.js';
-import {Badge, DotBadge, Card, Btn, FingerBars, LogEntry} from './components/index.js';
+import { APP_CONFIG, GESTURE_TEMPLATES } from '../config/app.config.js';
+import { Badge, DotBadge, Card, Btn, FingerBars, LogEntry } from './components/index.js';
 
 export function renderDetectTab(state) {
   var {
@@ -13,7 +13,7 @@ export function renderDetectTab(state) {
 
   return (
     _renderCamera(state, camActive, cameraError, running, trained, inputMode, contextState) +
-    Card('Finger Curl', FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS)) +
+    Card('Finger Curl Sensor', FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS)) +
     _renderSentenceBuilder(state, displayText, spelling, suggestions, wordSuggestions, completion, geminiEnabled) +
     (trained ? _renderQuickTest(gestures) : '') +
     (log.length ? _renderLog(log) : '')
@@ -28,47 +28,47 @@ function _renderCamera(state, camActive, cameraError, running, trained, inputMod
         '<span class="bg bg-g" id="fpsB">-- FPS</span>' +
         '<span class="bg bg-d" id="handB">No Hand</span>' +
       '</div>' +
-      '<div class="vid-gesture" id="gestDisp" style="display:none">' +
-        '<div class="gesture-name" id="gestName"></div>' +
-        '<div class="gesture-conf" id="gestConf"></div>' +
-      '</div>' +
-      (!camActive ? '<div class="vid-overlay"><div style="font-size:36px">📷</div><div style="font-size:10px;letter-spacing:.12em">START CAMERA</div></div>' : '') +
+      (!camActive ? '<div class="vid-overlay"><div style="font-size:11px;color:var(--mx);margin-top:4px">tap start camera</div></div>' : '') +
     '</div>' +
 
-    // system gesture progress bar
     '<div style="height:3px;background:var(--s2);position:relative;margin-bottom:10px">' +
       '<div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div>' +
     '</div>' +
 
-    '<div class="fr fr-center mb8" style="gap:6px;flex-wrap:wrap">' +
+    '<div class="fr fr-center mb8" style="gap:8px;flex-wrap:wrap">' +
       (camActive
-        ? Btn('■ Stop Camera', 'window._app.stopCamera()', 'r', 'sm')
-        : Btn(cameraError ? '⚠ Retry Camera' : '📷 Start Camera', 'window._app.startCamera()', 'o', 'sm')) +
-      (camActive ? Btn('⇄ Flip', 'window._app.switchCamera()', 'o', 'sm') : '') +
+        ? Btn('Stop', 'window._app.stopCamera()', 'r', 'sm')
+        : Btn(cameraError ? 'Retry Camera' : 'Start Camera', 'window._app.startCamera()', 'o', 'sm')) +
+      (camActive ? Btn('Flip', 'window._app.switchCamera()', 'o', 'sm') : '') +
       (!running
-        ? Btn('▶ Recognize', 'window._app.startRecognition()', camActive ? 'g' : 'o', '', !trained)
-        : Btn('■ Stop', 'window._app.stopRecognition()', 'r')) +
-      '<select onchange="window._app.setInputMode(this.value)" style="background:var(--s2);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 9px;font-family:inherit;font-size:10px;font-weight:600">' +
-        '<option value="camera"' + (inputMode === 'camera' ? ' selected' : '') + '>📷 Camera</option>' +
-        '<option value="glove"'  + (inputMode === 'glove'  ? ' selected' : '') + '>🧤 Glove</option>' +
-        '<option value="both"'   + (inputMode === 'both'   ? ' selected' : '') + '>⚡ Both</option>' +
+        ? Btn('Recognize', 'window._app.startRecognition()', camActive ? 'g' : 'o', '', !trained)
+        : Btn('Stop', 'window._app.stopRecognition()', 'r')) +
+      '<select onchange="window._app.setInputMode(this.value)" style="background:var(--s2);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 9px;font-family:inherit;font-size:11px">' +
+        '<option value="camera"' + (inputMode === 'camera' ? ' selected' : '') + '>Camera</option>' +
+        '<option value="glove"' + (inputMode === 'glove' ? ' selected' : '') + '>Glove</option>' +
+        '<option value="both"' + (inputMode === 'both' ? ' selected' : '') + '>Both</option>' +
       '</select>' +
     '</div>' +
-    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:6px 10px;background:var(--rD);border-radius:6px;border:1px solid var(--r)">⚠ ' + cameraError + '</div>' : '');
 
-  var statusBadges = (running || camActive ? DotBadge('Active', 'g', running || camActive) : DotBadge('Idle', 'dm', false)) +
-    (contextState !== 'IDLE' ? ' ' + Badge(contextState, 'p') : '');
+    (cameraError ? '<div style="font-size:11px;color:var(--r);padding:8px 12px;background:var(--rD);border-radius:6px;border:1px solid var(--r);margin-bottom:8px">' + cameraError + '</div>' : '');
+
+  var statusBadge = running || camActive
+    ? DotBadge('Active', 'g', running || camActive)
+    : DotBadge('Idle', 'd', false);
+
+  var contextBadge = contextState !== 'IDLE' ? ' ' + Badge(contextState, 'p') : '';
 
   return Card(
-    '<span>Live Recognition</span><span class="flex"></span>' + statusBadges,
+    '<span>Live Recognition</span><span class="flex"></span>' + statusBadge + contextBadge,
     cameraContent,
     'position:relative;overflow:hidden'
   );
 }
 
 function _renderSentenceBuilder(state, displayText, spelling, suggestions, wordSuggestions, completion, geminiEnabled) {
-  var titleRight = (geminiEnabled ? Badge('Gemini AI', 'a') : Badge('Local', 'd')) +
-    ' ' + Btn('🔊', 'window._app.speakSentence()', 'o', 'sm', !state.sentence);
+  var titleRight =
+    (geminiEnabled ? Badge('Gemini AI', 'a') : Badge('Local NLP', 'd')) +
+    ' ' + Btn('Speak', 'window._app.speakSentence()', 'o', 'sm', !state.sentence);
 
   var body =
     '<div class="sent-box' + (displayText ? '' : ' empty') + '">' +
@@ -76,47 +76,45 @@ function _renderSentenceBuilder(state, displayText, spelling, suggestions, wordS
       '<span class="cursor"></span>' +
     '</div>' +
 
-    (spelling ? '<div style="font-size:10px;color:var(--p);margin-bottom:6px">SPELLING: <strong>' + spelling.toUpperCase() + '_</strong></div>' : '') +
+    (spelling ? '<div style="font-size:11px;color:var(--p);margin-bottom:8px">Spelling: <strong>' + spelling.toUpperCase() + '_</strong></div>' : '') +
 
     (wordSuggestions.length
-      ? '<div class="mb8">' +
-          '<div style="font-size:9px;color:var(--a);letter-spacing:.1em;margin-bottom:4px">WORD MATCHES</div>' +
-          '<div class="suggs">' +
-            wordSuggestions.map(function(w, i) {
-              return '<span class="sugg ai" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
-                '<span style="font-size:8px;opacity:.5">' + (i + 1) + '</span> ' + w +
-              '</span>';
-            }).join('') +
-          '</div>' +
-        '</div>'
+      ? '<div class="mb8"><div style="font-size:10px;color:var(--mx);margin-bottom:5px">Word matches</div>' +
+        '<div class="suggs">' +
+        wordSuggestions.map(function(w, i) {
+          return '<span class="sugg ai" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
+            '<span style="opacity:.5;font-size:9px">' + (i + 1) + '</span> ' + w +
+            '</span>';
+        }).join('') +
+        '</div></div>'
       : '') +
 
     (completion && completion !== state.sentence
       ? '<div class="completion" onclick="window._app.acceptCompletion()">' +
-          '<div class="completion-label">✨ Gemini suggests</div>' +
+          '<div class="completion-label">Gemini suggests</div>' +
           '<div class="completion-text">"' + completion + '"</div>' +
         '</div>'
       : '') +
 
-    '<div style="font-size:9px;color:var(--mx);letter-spacing:.1em;margin-bottom:6px">' +
-      (geminiEnabled ? 'AI' : 'LOCAL') + ' NEXT WORD' +
+    '<div style="font-size:10px;color:var(--mx);margin-bottom:7px">' +
+      (geminiEnabled ? 'AI' : 'Local') + ' next word predictions' +
     '</div>' +
     '<div class="suggs">' +
       suggestions.map(function(w, i) {
         return '<span class="sugg' + (geminiEnabled ? ' ai' : '') + '" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
-          '<span style="font-size:8px;opacity:.5">' + (i + 1) + '</span> ' + w +
-        '</span>';
+          '<span style="opacity:.5;font-size:9px">' + (i + 1) + '</span> ' + w +
+          '</span>';
       }).join('') +
     '</div>' +
 
     '<div class="fr fr-end g6 mt8">' +
-      (geminiEnabled && state.sentence ? Btn('✨ Fix Grammar', 'window._app.fixGrammar()', 'ghost', 'sm') : '') +
-      Btn('↩ Undo', 'window._app.undoWord()', 'ghost', 'sm') +
-      Btn('✕ Clear', 'window._app.clearSentence()', 'ghost', 'sm') +
+      (geminiEnabled && state.sentence ? Btn('Fix Grammar', 'window._app.fixGrammar()', 'ghost', 'sm') : '') +
+      Btn('Undo', 'window._app.undoWord()', 'ghost', 'sm') +
+      Btn('Clear', 'window._app.clearSentence()', 'ghost', 'sm') +
     '</div>' +
 
-    '<div style="font-size:8px;color:var(--dm);margin-top:8px">' +
-      '✊ Hold fist = Speak · 🖐 Open palm = Clear · 👎 Thumbs down = Backspace · Hold 1–5 fingers = Select suggestion' +
+    '<div style="font-size:10px;color:var(--dm);margin-top:10px;line-height:1.7">' +
+      'Fist = Speak &nbsp;·&nbsp; Open palm = Clear &nbsp;·&nbsp; Thumbs down = Backspace' +
     '</div>';
 
   return Card(
@@ -138,7 +136,7 @@ function _renderQuickTest(gestures) {
 
 function _renderLog(log) {
   return Card(
-    'Recognition Log',
+    'Recent Detections',
     '<div style="max-height:180px;overflow-y:auto">' +
       log.slice(0, 15).map(function(entry, i) {
         return LogEntry(entry, 1 - i * 0.05);

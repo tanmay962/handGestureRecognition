@@ -232,7 +232,7 @@ export class TrainingController {
         })
       });
 
-      var DYN_EPOCHS = 300, DYN_BATCH = 15;
+      var DYN_EPOCHS = 400, DYN_BATCH = 15;
       for (var dep = 0; dep < DYN_EPOCHS; dep += DYN_BATCH) {
         await new Promise(function(r){ setTimeout(r, 4); });
         var dep2 = Math.min(DYN_BATCH, DYN_EPOCHS - dep);

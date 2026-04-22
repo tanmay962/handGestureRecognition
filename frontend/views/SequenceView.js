@@ -15,7 +15,7 @@ export function renderSequenceTab(state) {
 
 function _renderIntro() {
   return Card(
-    '🔗 Gesture Combos',
+    'Gesture Combos',
     '<div style="font-size:12px;color:var(--mx);line-height:1.7">' +
       '<strong style="color:var(--g)">Combos</strong> fire when you sign a specific sequence of gestures. ' +
       'The <strong style="color:var(--p)">dynamic model</strong> handles motion-based gestures like J and Z.' +
@@ -37,7 +37,7 @@ function _renderBuilder(gestures, seq) {
         seq.map(function(g, i) {
           return Badge(g, 'p') + (i < seq.length - 1 ? '<span style="color:var(--dm)">→</span>' : '');
         }).join('') +
-        '<button class="btn btn-ghost btn-sm" onclick="window._comboSeq=[];window._app.switchTab(\'sequences\')">✕ clear</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="window._comboSeq=[];window._app.switchTab(\'sequences\')">clear</button>' +
       '</div>'
     : '<div style="font-size:10px;color:var(--dm);margin-bottom:8px">Tap gestures above to build a sequence (min 2).</div>';
 

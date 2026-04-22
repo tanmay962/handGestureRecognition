@@ -21,15 +21,15 @@ export function renderUserMode(state) {
 }
 
 function _renderUserHeader(state) {
-  return '<div style="padding:12px 0 8px;display:flex;align-items:center;justify-content:space-between">' +
+  return '<div style="padding:14px 0 10px;display:flex;align-items:center;justify-content:space-between">' +
     '<div>' +
-      '<div style="font-size:9px;letter-spacing:.2em;color:var(--g);font-weight:700">✋ GESTURE DETECTION</div>' +
-      '<div style="font-size:15px;font-weight:700">Sign to <span style="color:var(--g)">Communicate</span></div>' +
+      '<div style="font-size:11px;color:var(--g);font-weight:600;margin-bottom:3px">gesture detection</div>' +
+      '<div style="font-size:16px;font-weight:700">Sign to <span style="color:var(--g)">Communicate</span></div>' +
     '</div>' +
     '<button class="btn btn-o btn-sm" ' +
       'onclick="document.getElementById(\'userSettings\').style.display=' +
         'document.getElementById(\'userSettings\').style.display===\'none\'?\'block\':\'none\'" ' +
-      'style="font-size:16px;padding:7px">⚙</button>' +
+      '>Settings</button>' +
   '</div>';
 }
 
@@ -53,7 +53,7 @@ function _renderUserSettings(state, inputMode) {
         'var pin=prompt(\'Enter admin PIN:\');' +
         'if(pin&&window._app.checkAdminPin(pin)){window._app.switchMode(\'admin\')}' +
         'else if(pin){alert(\'Wrong PIN\')}' +
-      '">🔒 Admin</button>' +
+      '">Admin</button>' +
     '</div>' +
   '</div>';
 }
@@ -70,18 +70,18 @@ function _renderUserCamera(camActive, cameraError, trained, running) {
         '<div class="gesture-name" id="gestName"></div>' +
         '<div class="gesture-conf" id="gestConf"></div>' +
       '</div>' +
-      (!camActive ? '<div class="vid-overlay"><div style="font-size:40px">✋</div><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
+      (!camActive ? '<div class="vid-overlay"><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
     '</div>' +
     '<div style="height:3px;background:var(--s2)"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>' +
   '</div>' +
 
   '<div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px;flex-wrap:wrap">' +
     (camActive
-      ? '<button class="btn btn-r" onclick="window._app.stopCamera()">■ Stop Camera</button>'
-      : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? '⚠ Retry Camera' : '📷 Start Camera') + '</button>') +
-    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">⚠ ' + cameraError + '</div>' : '') +
-    (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">▶ Recognize</button>' : '') +
-    (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">■ Stop</button>' : '') +
+      ? '<button class="btn btn-r" onclick="window._app.stopCamera()">Stop Camera</button>'
+      : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? 'Retry Camera' : 'Start Camera') + '</button>') +
+    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">' + cameraError + '</div>' : '') +
+    (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">Recognize</button>' : '') +
+    (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">Stop</button>' : '') +
   '</div>';
 }
 
@@ -124,14 +124,14 @@ function _renderUserSentence(state, displayText, spelling, suggestions, wordSugg
 
     (completion && completion !== state.sentence
       ? '<div class="completion" onclick="window._app.acceptCompletion()">' +
-          '<div class="completion-label">✨ AI suggests</div>' +
+          '<div class="completion-label">AI suggests</div>' +
           '<div class="completion-text">"' + completion + '"</div>' +
         '</div>'
       : '') +
 
     '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px">' +
       '<span style="font-size:9px;color:var(--dm);letter-spacing:.1em">' + contextState + ' ' + (state.geminiEnabled ? '· Gemini AI' : '') + '</span>' +
-      '<div style="font-size:9px;color:var(--dm)">✊=Speak · 🖐=Clear · 👎=Undo</div>' +
+      '<div style="font-size:9px;color:var(--dm)">Fist=Speak · Palm=Clear · Thumbs down=Undo</div>' +
     '</div>' +
   '</div>';
 }

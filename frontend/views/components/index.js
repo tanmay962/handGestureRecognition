@@ -26,8 +26,8 @@ export const Card = (title, body, style) =>
   `</div>`;
 
 export const Toggle = (on, onclick) =>
-  `<div class="toggle" style="background:${on ? 'var(--g)' : 'var(--s2)'}" onclick="${onclick}">` +
-    `<div class="knob" style="background:${on ? 'var(--bg)' : 'var(--dm)'};left:${on ? '21px' : '3px'}"></div>` +
+  `<div class="toggle" onclick="${onclick}">` +
+    `<div class="knob" style="left:${on ? '21px' : '3px'}"></div>` +
   `</div>`;
 
 export const Bar = (pct, color) =>
@@ -51,7 +51,7 @@ export const LogEntry = (entry, opacity) => {
   return `<div class="log-entry" style="opacity:${opacity}">` +
     `<div class="fr g5">` +
       Badge(entry.gesture, 'g') +
-      (entry.combo ? Badge('⚡' + entry.combo, 'p') : '') +
+      (entry.combo ? Badge(entry.combo, 'p') : '') +
       (entry.model ? `<span style="font-size:8px;color:var(--dm)">[${entry.model}]</span>` : '') +
     `</div>` +
     `<div class="fr g5">` +

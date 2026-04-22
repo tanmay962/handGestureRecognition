@@ -12,38 +12,40 @@ var APP_CONFIG = {
     STATIC_HIDDEN:       [256, 128, 64],
     DYNAMIC_HIDDEN:      [256, 128, 64],
     LEARNING_RATE:       0.008,
-    TRAINING_EPOCHS:     300,
+    TRAINING_EPOCHS:     500,   // was 300 — more epochs = better convergence
     EPOCH_BATCH:         10,
     SAMPLES_PER_GESTURE: 35,
-    STATIC_INPUT:        41,    // holistic: 11+11+8+6+3+2 = 41
-    DYNAMIC_INPUT:       1845,  // 41 x 45 frames
+    STATIC_INPUT:        41,
+    DYNAMIC_INPUT:       1845,
     DYNAMIC_FRAMES:      45,
     FEATURE_VERSION:     '1.0',
   },
 
   RECOGNITION: {
     CONFIDENCE_THRESHOLD:  0.65,
-    // Time-based stability (ms) — replaces frame-count check
-    STABLE_MS_LETTER:      600,
-    STABLE_MS_WORD:        900,
-    STABLE_MS_NUMBER:      600,
-    // Separate cooldowns per gesture type
-    COOLDOWN_SAME_LETTER:  1200,
-    COOLDOWN_DIFF_LETTER:  400,
-    COOLDOWN_WORD:         1800,
+    // Stability hold — longer = fewer false triggers, more deliberate
+    STABLE_MS_LETTER:      750,   // was 600
+    STABLE_MS_WORD:        1100,  // was 900
+    STABLE_MS_NUMBER:      750,   // was 600
+    // Cooldowns — space out repeated recognitions
+    COOLDOWN_SAME_LETTER:  1600,  // was 1200
+    COOLDOWN_DIFF_LETTER:  550,   // was 400
+    COOLDOWN_WORD:         2200,  // was 1800 — prevents word bursts
     // Prediction rate limiting
-    PREDICT_EVERY_N:       3,    // predict 1 in every 3 frames = ~10fps
-    // Confidence smoothing
-    CONF_SMOOTH_WINDOW:    5,    // rolling average over N frames
+    PREDICT_EVERY_N:       3,
+    // Confidence smoothing — larger window = smoother, less jittery
+    CONF_SMOOTH_WINDOW:    7,     // was 5
     // Motion detection threshold for LSTM activation
     MOTION_THRESHOLD:      0.08,
     DYNAMIC_CONF_THRESH:   0.75,
     DWELL_TIME:            1500,
-    SPELL_PAUSE:           2000,
+    SPELL_PAUSE:           2200,  // was 2000
     // NLP debounce
-    NLP_DEBOUNCE_MS:       300,
-    // Ensemble voting: average last N probability vectors before confirming
-    ENSEMBLE_WINDOW:       5,
+    NLP_DEBOUNCE_MS:       400,   // was 300
+    // Ensemble voting — more history = more stable argmax
+    ENSEMBLE_WINDOW:       7,     // was 5
+    // TTS word-queue buffer — accumulate words before speaking (ms)
+    TTS_BUFFER_MS:         1800,
   },
 
   MEDIAPIPE: {
@@ -87,10 +89,10 @@ var APP_CONFIG = {
   SEQUENCE: { WINDOW_SIZE:45, MAX_HISTORY:20, DEFAULT_TIMEOUT:3000 },
 
   TABS_ADMIN: [
-    { id:'detect',    label:'✋ Detect'    },
-    { id:'train',     label:'🧠 Train'     },
-    { id:'sequences', label:'🔗 Sequences' },
-    { id:'settings',  label:'⚙ Settings'  },
+    { id:'detect',    label:'Detect'    },
+    { id:'train',     label:'Train'     },
+    { id:'sequences', label:'Sequences' },
+    { id:'settings',  label:'Settings'  },
   ],
 
   FINGER_NAMES:  ['Thumb','Index','Middle','Ring','Pinky'],

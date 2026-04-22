@@ -123,6 +123,26 @@ export class AppController {
         if (tv) tv.textContent  = pct + '%';
       }
     });
+
+    // Update recording progress bar directly in DOM on each frame tick
+    eventBus.on(Events.RECORDING_TICK, function(d) {
+      var bar   = document.getElementById('recProgBar');
+      var label = document.getElementById('recProgLabel');
+      if (!d) return;
+      var pct = Math.round((d.frame / d.total) * 100);
+      if (bar)   bar.style.width = pct + '%';
+      if (label) label.textContent = d.frame + ' / ' + d.total + ' frames';
+    });
+
+    // Show / hide recording trail on canvas
+    eventBus.on(Events.RECORDING_START, function() {
+      self.camera._recordingTrail = [];
+      self.camera._isRecording    = true;
+    });
+    eventBus.on(Events.RECORDING_DONE, function() {
+      self.camera._isRecording    = false;
+      self.camera._recordingTrail = [];
+    });
   }
 
   // ── Boot ──────────────────────────────────────────────────────────────────

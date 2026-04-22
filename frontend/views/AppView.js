@@ -1,15 +1,15 @@
 // views/AppView.js
 'use strict';
 
-var AppView = (function() {
+var AppView = (function () {
   function AppView(root, ctrl) {
     this.root = root;
     this.ctrl = ctrl;
   }
 
-  AppView.prototype.render = function() {
+  AppView.prototype.render = function () {
     var state = this.ctrl.getState();
-    var html  = '';
+    var html = '';
 
     if (state.mode === 'user') {
       html = renderUserMode(state);
@@ -28,23 +28,25 @@ var AppView = (function() {
 })();
 
 function _renderHeader(state) {
-  var camBadge    = state.camActive ? '<span class="bg bg-g"><span class="dot dot-g dot-pulse"></span>Live</span>' : '';
-  var modelBadge  = (state.staticTrained || state.dynamicTrained)
-    ? '<span class="bg bg-g">Model ready</span>'
-    : '<span class="bg bg-d">No model</span>';
-  var geminiBadge = state.geminiEnabled ? '<span class="bg bg-a">Gemini</span>' : '';
+  var trained = state.staticTrained || state.dynamicTrained;
+  var modelBadge = trained
+    ? '<span class="bg bg-g">model ready</span>'
+    : '';
+  var camBadge = state.camActive
+    ? '<span class="bg bg-g"><span class="dot dot-g dot-pulse"></span> live</span>'
+    : '';
+  var geminiBadge = state.geminiEnabled ? '<span class="bg bg-a">gemini</span>' : '';
 
   return '<div class="hdr">' +
     '<div>' +
-      '<div class="hdr-brand">✋ Gesture Detection</div>' +
-      '<div class="hdr-title">Hand Recognition <em>System</em></div>' +
+    '<div class="hdr-brand">gesture detection</div>' +
+    '<div class="hdr-title">Sign Language <em>Recognition</em></div>' +
     '</div>' +
-    '<div class="hdr-badges">' +
-      camBadge +
-      modelBadge +
-      geminiBadge +
+    '<div class="hdr-badges">' + camBadge + modelBadge + geminiBadge +
+    '<button class="btn btn-o btn-sm" onclick="window._app.switchMode(\'user\')" title="Back to user view" ' +
+      'style="font-size:11px;padding:4px 9px;border-color:var(--brd);color:var(--mx)">User View</button>' +
     '</div>' +
-  '</div>';
+    '</div>';
 }
 
 function _renderTabs(state) {
@@ -61,10 +63,10 @@ function _renderTabs(state) {
 
 function _renderTabContent(state) {
   switch (state.tab) {
-    case 'detect':    return renderDetectTab(state);
-    case 'train':     return renderTrainTab(state);
+    case 'detect': return renderDetectTab(state);
+    case 'train': return renderTrainTab(state);
     case 'sequences': return renderSequenceTab(state);
-    case 'settings':  return renderSettingsTab(state);
-    default:          return renderDetectTab(state);
+    case 'settings': return renderSettingsTab(state);
+    default: return renderDetectTab(state);
   }
 }

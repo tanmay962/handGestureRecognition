@@ -27,16 +27,16 @@ function _renderGeminiCard(apiKey, apiStatus) {
   var gemFn = "(async function(){await window._app.connectGemini(document.getElementById('apiKeyInput').value)})()";
 
   return Card(
-    '✨ Gemini AI',
+    'Gemini AI',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
       'Next-word suggestions, grammar correction, sentence completion. ' +
       'Get a free key at <span style="color:var(--g)">aistudio.google.com</span>.' +
     '</div>' +
     '<div class="fr g6 mb8">' +
       '<input class="inp f1" id="apiKeyInput" type="password" placeholder="Paste API key…" value="' + apiKey + '">' +
-      Btn(isConnected ? '✓ Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
+      Btn(isConnected ? 'Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
     '</div>' +
-    (isConnected ? '<div style="font-size:10px;color:var(--g)">✓ Gemini is active</div>' : ''),
+    (isConnected ? '<div style="font-size:10px;color:var(--g)">Gemini is active</div>' : ''),
     'border-color:' + borderColor
   );
 }
@@ -47,7 +47,7 @@ function _renderMQTTCard(connected, broker, topic) {
     : '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dm);margin-right:5px"></span>';
 
   return Card(
-    '📡 MQTT Publish',
+    'MQTT Publish',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:10px">' +
       'Publish recognized gestures to any MQTT subscriber — Raspberry Pi, Arduino, another phone.' +
     '</div>' +
@@ -60,7 +60,7 @@ function _renderMQTTCard(connected, broker, topic) {
     ) +
     (connected
       ? '<div style="font-size:9px;color:var(--dm);margin-top:6px">Topic: <span style="color:var(--p)">' + topic + '</span></div>' +
-        '<div style="font-size:10px;color:var(--g);padding:6px 10px;background:var(--gD);border-radius:6px;margin-top:8px">✓ Publishing gestures to broker</div>'
+        '<div style="font-size:10px;color:var(--g);padding:6px 10px;background:var(--gD);border-radius:6px;margin-top:8px">Publishing gestures to broker</div>'
       : '<div style="font-size:9px;color:var(--dm);margin-top:8px">' +
           'Subscribe anywhere: <code style="color:var(--a)">mosquitto_sub -h broker.hivemq.com -t "' + (topic || 'gesture-detection/results/gesture') + '"</code>' +
         '</div>')
@@ -69,7 +69,7 @@ function _renderMQTTCard(connected, broker, topic) {
 
 function _renderCameraCard(camActive) {
   return Card(
-    '📷 Camera',
+    'Camera',
     SettingRow(
       'Live camera',
       'MediaPipe Holistic — hands + face + body',
@@ -81,7 +81,7 @@ function _renderCameraCard(camActive) {
 
 function _renderTTSCard(tts) {
   return Card(
-    '🔊 Text-to-Speech',
+    'Text-to-Speech',
     SettingRow('Enable TTS', '', Toggle(tts.enabled, 'window._app.setTTSEnabled(' + !tts.enabled + ')')) +
     SettingRow('Auto-speak on gesture', '', Toggle(tts.auto, 'window._app.setAutoSpeak(' + !tts.auto + ')')) +
     SettingRow(
@@ -95,7 +95,7 @@ function _renderTTSCard(tts) {
 
 function _renderRecognitionCard(confThresh) {
   return Card(
-    '🎯 Recognition',
+    'Recognition',
     SettingRow(
       'Confidence: ' + Math.round(confThresh * 100) + '%',
       'Minimum confidence before a gesture is accepted',
@@ -110,13 +110,13 @@ function _renderRecognitionCard(confThresh) {
 
 function _renderBackupCard() {
   return Card(
-    '💾 Data Backup',
+    'Data Backup',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
       'Export all training samples and settings to a JSON file. Import on any device.' +
     '</div>' +
     '<div class="fr g6 mb8">' +
-      Btn('⬇ Export', 'window._app.exportDataset()', 'g') +
-      Btn('⬆ Import', 'document.getElementById(\'importFileInput\').click()', 'o') +
+      Btn('Export', 'window._app.exportDataset()', 'g') +
+      Btn('Import', 'document.getElementById(\'importFileInput\').click()', 'o') +
     '</div>' +
     '<input type="file" id="importFileInput" accept=".json" style="display:none" ' +
       'onchange="window._app.importDataset(this.files[0]);this.value=\'\'">'
@@ -125,7 +125,7 @@ function _renderBackupCard() {
 
 function _renderAdminCard() {
   return Card(
-    '🔒 Admin',
+    'Admin',
     SettingRow(
       'Change PIN',
       '',
@@ -138,6 +138,6 @@ function _renderAdminCard() {
         '">Set</button>' +
       '</div>'
     ) +
-    SettingRow('Exit Admin', '', Btn('← User Mode', "window._app.switchMode('user')", 'o', 'sm'))
+    SettingRow('Exit Admin', '', Btn('User Mode', "window._app.switchMode('user')", 'o', 'sm'))
   );
 }
