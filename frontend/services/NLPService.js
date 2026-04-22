@@ -60,64 +60,24 @@ export class NLPService {
     return this.gemini.completeSentence(sm.getSentence());
   }
 
-  // ── Grammar correction — Gemini first, offline fallback ───────
+  // ── Grammar correction — Gemini first, backend fallback ──────
   async correctGrammar(sm) {
     // Try Gemini
     if (this.gemini && this.gemini.enabled && sm.getWordCount() >= 3) {
       var aiResult = await this.gemini.correctGrammar(sm.getSentence());
       if (aiResult) return aiResult;
     }
-    // Offline fallback
-    return this._offlineGrammar(sm.getSentence());
-  }
-
-  // ── Offline grammar correction (no Gemini needed) ─────────────
-  // Handles most common sign language grammar patterns
-  _offlineGrammar(sentence) {
-    if (!sentence || sentence.trim().length === 0) return null;
-    var words = sentence.trim().toLowerCase().split(/\s+/);
-    var corrected = words.slice();
-    var changed = false;
-
-    // Rule 1: Add "I" at start if sentence starts with action verb
-    var actionVerbs = ['want','need','like','love','hate','go','see','hear','feel','know','think'];
-    if (corrected.length > 0 && actionVerbs.indexOf(corrected[0]) >= 0) {
-      corrected.unshift('i');
-      changed = true;
+    // Backend fallback (Python rule-based, same logic as before)
+    try {
+      var res = await fetch(API + '/nlp/grammar', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sentence: sm.getSentence() })
+      });
+      var data = await res.json();
+      return data.corrected || null;
+    } catch(e) {
+      return null;
     }
-
-    // Rule 2: "me" at start → "I"
-    if (corrected[0] === 'me') { corrected[0] = 'i'; changed = true; }
-
-    // Rule 3: Capitalise first word
-    if (corrected.length > 0) {
-      corrected[0] = corrected[0].charAt(0).toUpperCase() + corrected[0].slice(1);
-    }
-
-    // Rule 4: "i " → "I " (anywhere in sentence)
-    for (var i = 1; i < corrected.length; i++) {
-      if (corrected[i] === 'i') { corrected[i] = 'I'; changed = true; }
-    }
-
-    // Rule 5: Remove duplicate consecutive words
-    var deduped = [corrected[0]];
-    for (var j = 1; j < corrected.length; j++) {
-      if (corrected[j].toLowerCase() !== corrected[j-1].toLowerCase()) {
-        deduped.push(corrected[j]);
-      } else {
-        changed = true;
-      }
-    }
-    corrected = deduped;
-
-    // Rule 6: Add period at end if missing
-    var last = corrected[corrected.length - 1];
-    if (last && '.!?'.indexOf(last.slice(-1)) < 0) {
-      corrected[corrected.length - 1] = last + '.';
-      changed = true;
-    }
-
-    return changed ? corrected.join(' ') : null;
   }
 
   // ── Learn from accepted sentence (Phase 2B) ───────────────────

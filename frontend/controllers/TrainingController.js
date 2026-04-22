@@ -9,12 +9,11 @@ import {eventBus, Events} from '../utils/EventBus.js';
 var API = '/api';
 
 export class TrainingController {
-  constructor(staticNN, dynamicNN, gestureModel, sensorModel, db) {
+  constructor(staticNN, dynamicNN, gestureModel, sensorModel) {
     this.staticNN   = staticNN;
     this.dynamicNN  = dynamicNN;
     this.gm         = gestureModel;
     this.sensor     = sensorModel;
-    this.db         = db;
     this.isTraining = false;
     this.progress   = 0;
     this._camera    = null; // set by AppController after camera init

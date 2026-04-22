@@ -12,7 +12,6 @@ import {GeminiService} from '../services/GeminiService.js';
 import {NLPService} from '../services/NLPService.js';
 import {TTSService} from '../services/TTSService.js';
 import {StorageService} from '../services/StorageService.js';
-import {DatabaseService} from '../services/DatabaseService.js';
 import {MQTTService} from '../services/MQTTService.js';
 import {RecognitionController} from './RecognitionController.js';
 import {TrainingController} from './TrainingController.js';
@@ -28,10 +27,9 @@ export class AppController {
     this.appMode   = 'user';
     this._dbReady  = false;
 
-    this.db           = new DatabaseService();
     this.staticNN     = new NeuralNetwork('static');
     this.dynamicNN    = new NeuralNetwork('dynamic');
-    this.gestureModel = new GestureModel(APP_CONFIG.DEFAULT_GESTURES, this.db);
+    this.gestureModel = new GestureModel(APP_CONFIG.DEFAULT_GESTURES);
     this.sentenceModel= new SentenceModel();
     this.sensorModel  = new SensorModel();
 
@@ -48,7 +46,7 @@ export class AppController {
     this.recogCtrl = new RecognitionController(this.staticNN, this.dynamicNN,
                        this.sensorModel, this.sentenceModel, this.nlp, this.tts, this.seqCtrl);
     this.trainCtrl = new TrainingController(this.staticNN, this.dynamicNN,
-                       this.gestureModel, this.sensorModel, this.db);
+                       this.gestureModel, this.sensorModel);
     this.view      = new AppView(root, this);
     // Wire camera reference to TrainingController for mirror augmentation
     this.trainCtrl.setCamera(this.camera);
@@ -557,7 +555,8 @@ export class AppController {
 
   // ── Export / Import ───────────────────────────────────────────────────────
   async viewSampleDetails(gestureName) {
-    var preview = await this.db.getSamplePreview(gestureName, 3);
+    var preview = await fetch(API + '/samples/preview/' + encodeURIComponent(gestureName))
+      .then(function(r){ return r.json(); }).catch(function(){ return []; });
     window._samplePreview = preview;
     window._samplePreviewGesture = gestureName;
     this.view.render();
@@ -597,7 +596,10 @@ export class AppController {
   async connectGemini(key) {
     var ok = await this.gemini.testConnection(key);
     StorageService.saveApiKey(key);
-    if (this.db) await this.db.saveSetting('apiKey', key);
+    fetch(API + '/settings', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({key: 'apiKey', value: JSON.stringify(key)})
+    }).catch(function(){});
     this.view.render();
     return ok;
   }

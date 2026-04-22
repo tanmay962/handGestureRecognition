@@ -519,11 +519,15 @@ var RecognitionController = (function() {
   };
 
   RecognitionController.prototype.quickTest = function(gestureName, gestureModel) {
-    var features = gestureModel.simulateStatic(gestureName);
-    // Pad to 41
-    while (features.length < 41) features.push(0);
-    this.sensor.setFromFeatures(features);
-    this._onGestureConfirmed(gestureName, 0.95, 'demo');
+    var self = this;
+    return gestureModel.simulateStaticAsync(gestureName, 1).then(function(samples) {
+      var features = (samples && samples[0]) ? samples[0] : [];
+      while (features.length < 41) features.push(0);
+      self.sensor.setFromFeatures(features);
+      self._onGestureConfirmed(gestureName, 0.95, 'demo');
+    }).catch(function() {
+      self._onGestureConfirmed(gestureName, 0.95, 'demo');
+    });
   };
 
   return RecognitionController;

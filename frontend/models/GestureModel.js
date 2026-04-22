@@ -6,13 +6,12 @@ import {APP_CONFIG, GESTURE_TEMPLATES} from '../config/app.config.js';
 // (API already defined in bundle header)
 
 export class GestureModel {
-  constructor(defaultGestures, db) {
+  constructor(defaultGestures) {
     this.gestures       = [...defaultGestures];
     this.staticSamples  = {};
     this.dynamicSamples = {};
     this.sampleCounts   = {};
     this.templates      = GESTURE_TEMPLATES;
-    this.db             = db;
     this.recording      = false;
     this.recordTarget   = null;
     this.frameBuffer    = [];
@@ -75,15 +74,6 @@ export class GestureModel {
     });
     var data = await res.json();
     return data.samples;
-  }
-
-  simulateStatic(name) {
-    var t = this.templates[name];
-    if (!t) return Array(11).fill(0).map(function(){ return Math.random() * .5; });
-    var noise = function(s){ return (Math.random() - .5) * s; };
-    var clamp = function(v,a,b){ return Math.max(a, Math.min(b, v)); };
-    return [...t.curls.map(function(c){ return clamp(c + noise(.12), 0, 1); }),
-            ...t.ori.map(function(o){ return o + noise(.03); })];
   }
 
   // source param: 'camera' | 'glove' — defaults to this.trainSource

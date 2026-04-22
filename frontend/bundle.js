@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-22T09:42:41.826Z
+// Built: 2026-04-22T09:56:53.793Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -301,19 +301,11 @@ const wsClient = new WSClient();
 
 
 // ═══ utils/MathUtils.js ═══
-// utils/MathUtils.js — JS stubs; heavy math runs in Python backend
-// Used only by CameraService.js for feature extraction (browser-side only)
+// utils/MathUtils.js — browser-side math helpers used by CameraService
+// Heavy ML math (softmax, matrix ops) runs in Python backend
 
-const randomMatrix = (r, c) => {
-  const s = Math.sqrt(2 / r);
-  return Array.from({length: r}, () => Array.from({length: c}, () => (Math.random() - .5) * 2 * s));
-};
-const relu = x => Math.max(0, x);
-const reluDeriv = x => x > 0 ? 1 : 0;
-const softmax = a => { const m = Math.max(...a); const e = a.map(v => Math.exp(v - m)); const s = e.reduce((a, b) => a + b, 0); return e.map(v => v / s); };
-const argmax = a => a.indexOf(Math.max(...a));
-const noise = (s = .1) => (Math.random() - .5) * s;
-const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
+const noise  = (s = .1) => (Math.random() - .5) * s;
+const clamp  = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
 const dist3D = (a, b) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
 const norm3D = v => { const l = Math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2) || .001; return {x: v.x / l, y: v.y / l, z: v.z / l}; };
 
@@ -401,109 +393,57 @@ const FingerBars = (names, colors) =>
 
 
 // ═══ models/NeuralNetwork.js ═══
-// models/NeuralNetwork.js — Delegates training & inference to Python backend
+// models/NeuralNetwork.js — State container for trained model metadata
+// Training and inference happen in Python; this holds the result for the UI.
+
 class NeuralNetwork {
-  constructor(id = 'default') {
-    this.id = id;
-    this.trained = false;
+  constructor(id) {
+    this.id       = id || 'default';
+    this.trained  = false;
     this.gestures = new Map();
-    this.lr = 0.008;
     this.accuracy = 0;
-    this.loss = 1;
-    this.epochs = 0;
+    this.val_accuracy = 0;
+    this.loss     = 1;
+    this.epochs   = 0;
   }
 
+  // Called by TrainingController before training to record expected shape
   initialize(inputSize, hiddenSizes, outputSize) {
-    // Stored for reference; actual init done server-side via train()
-    this._inputSize = inputSize;
+    this._inputSize   = inputSize;
     this._hiddenSizes = hiddenSizes;
-    this._outputSize = outputSize;
-    console.log(`[NN:${this.id}] init registered ${inputSize}→${hiddenSizes.join('→')}→${outputSize}`);
-  }
-
-  // Called by TrainingController — sends everything to Python
-  async trainAsync(inputs, labels, epochs = 50) {
-    if (!inputs.length) return;
-    const outputSize = new Set(labels).size;
-
-    // Init on server
-    const gestureList = [...this.gestures.entries()].sort((a,b)=>a[0]-b[0]).map(([,n])=>n);
-    await fetch(`${API}/nn/init`, {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({model_type: this.id, input_size: this._inputSize || inputs[0].length,
-        hidden_sizes: this._hiddenSizes || [128,64,32], output_size: outputSize, gestures: gestureList})
-    });
-
-    // Train in batches of 10 epochs
-    const batchSize = 10;
-    for (let i = 0; i < epochs; i += batchSize) {
-      const res = await fetch(`${API}/nn/train`, {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({model_type: this.id, inputs, labels, epochs: Math.min(batchSize, epochs - i)})
-      });
-      const data = await res.json();
-      this.accuracy = data.accuracy;
-      this.loss = data.loss;
-      this.epochs = data.epochs;
-    }
-    this.trained = true;
-
-    // Persist to server DB
-    await fetch(`${API}/nn/save/${this.id}`, {method: 'POST'});
-    console.log(`[NN:${this.id}] trained via Python: acc=${(this.accuracy*100).toFixed(1)}%`);
-  }
-
-  // Synchronous shim kept for compatibility — use predictAsync in production
-  train(inputs, labels, epochs = 50) {
-    // Blocking sync train is unavailable when Python does the work.
-    // TrainingController calls this in a loop with await new Promise(setTimeout).
-    // We store data for the next async flush.
-    this._pendingInputs = inputs;
-    this._pendingLabels = labels;
-    this._pendingEpochs = (this._pendingEpochs || 0) + epochs;
-  }
-
-  async flushTraining() {
-    if (!this._pendingInputs || !this._pendingInputs.length) return;
-    await this.trainAsync(this._pendingInputs, this._pendingLabels, this._pendingEpochs || 50);
-    this._pendingInputs = null; this._pendingLabels = null; this._pendingEpochs = 0;
-  }
-
-  async predict(input) {
-    if (!this.trained) return {idx: -1, conf: 0, probs: []};
-    const res = await fetch(`${API}/nn/predict`, {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({features: input, model_type: this.id})
-    });
-    return res.json();
-  }
-
-  // Sync predict stub for compatibility (returns cached last result)
-  predictSync(input) {
-    return {idx: -1, conf: 0, probs: []};
+    this._outputSize  = outputSize;
   }
 
   addGesture(name, id) { this.gestures.set(id, name); }
-  getName(id) { return this.gestures.get(id) || 'Unknown'; }
-  getInputSize() { return this._inputSize || 0; }
+  getName(id)          { return this.gestures.get(id) || 'Unknown'; }
+  getInputSize()       { return this._inputSize || 0; }
 
   reset() {
-    this.trained = false; this.gestures = new Map();
-    this.accuracy = 0; this.loss = 1; this.epochs = 0;
-    this._pendingInputs = null; this._pendingLabels = null; this._pendingEpochs = 0;
-    fetch(`${API}/nn/reset/${this.id}`, {method: 'POST'});
-    console.log(`[NN:${this.id}] reset`);
+    this.trained  = false;
+    this.accuracy = 0;
+    this.loss     = 1;
+    this.epochs   = 0;
+    this.gestures = new Map();
+    fetch('/api/nn/reset/' + this.id, { method: 'POST' }).catch(function(){});
   }
 
   toJSON() {
-    return {id: this.id, layers: [], gestures: [...this.gestures.entries()],
-            accuracy: this.accuracy, loss: this.loss, epochs: this.epochs};
+    return {
+      id:       this.id,
+      gestures: [...this.gestures.entries()],
+      accuracy: this.accuracy,
+      loss:     this.loss,
+      epochs:   this.epochs,
+    };
   }
 
   fromJSON(d) {
     this.gestures = new Map(d.gestures);
-    this.accuracy = d.accuracy; this.loss = d.loss;
-    this.epochs = d.epochs; this.trained = true; this.id = d.id || this.id;
+    this.accuracy = d.accuracy;
+    this.loss     = d.loss;
+    this.epochs   = d.epochs;
+    this.trained  = true;
+    this.id       = d.id || this.id;
   }
 }
 
@@ -515,13 +455,12 @@ class NeuralNetwork {
 // (API already defined in bundle header)
 
 class GestureModel {
-  constructor(defaultGestures, db) {
+  constructor(defaultGestures) {
     this.gestures       = [...defaultGestures];
     this.staticSamples  = {};
     this.dynamicSamples = {};
     this.sampleCounts   = {};
     this.templates      = GESTURE_TEMPLATES;
-    this.db             = db;
     this.recording      = false;
     this.recordTarget   = null;
     this.frameBuffer    = [];
@@ -584,15 +523,6 @@ class GestureModel {
     });
     var data = await res.json();
     return data.samples;
-  }
-
-  simulateStatic(name) {
-    var t = this.templates[name];
-    if (!t) return Array(11).fill(0).map(function(){ return Math.random() * .5; });
-    var noise = function(s){ return (Math.random() - .5) * s; };
-    var clamp = function(v,a,b){ return Math.max(a, Math.min(b, v)); };
-    return [...t.curls.map(function(c){ return clamp(c + noise(.12), 0, 1); }),
-            ...t.ori.map(function(o){ return o + noise(.03); })];
   }
 
   // source param: 'camera' | 'glove' — defaults to this.trainSource
@@ -899,81 +829,6 @@ class StorageService {
   static loadCalibration() { return this.load('calibration', null); }
   static savePin(p) { this.save('adminPin', p); }
   static loadPin() { return this.load('adminPin', '1234'); }
-}
-
-
-// ═══ services/DatabaseService.js ═══
-// services/DatabaseService.js — REMOVED (upgrade 4)
-// All persistence now lives in Python SQLite backend (backend/main.py)
-// This shim keeps existing import statements working without errors.
-
-class DatabaseService {
-  constructor() { this._ready = Promise.resolve(); }
-
-  async loadModel(id) {
-    // Models are loaded directly by AppController via /api/nn/load/:id
-    // Return null so AppController falls through to its own fetch call
-    return null;
-  }
-  async saveModel(id, data) {
-    await fetch(`${API}/nn/save/${id}`, { method: 'POST' });
-  }
-  async clearModels() {
-    await fetch(`${API}/nn/reset/static`, { method: 'POST' });
-    await fetch(`${API}/nn/reset/dynamic`, { method: 'POST' });
-  }
-  async saveStaticSamples(gesture, samples) {
-    await fetch(`${API}/samples/save`, { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ gesture, samples, sample_type: 'static' }) });
-  }
-  async saveDynamicSamples(gesture, samples) {
-    await fetch(`${API}/samples/save`, { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ gesture, samples, sample_type: 'dynamic' }) });
-  }
-  async getAllStaticSamples() {
-    const r = await fetch(`${API}/samples/load`); const d = await r.json();
-    const out = {};
-    for (const [g, v] of Object.entries(d)) { if (v.static) out[g] = v.static; }
-    return out;
-  }
-  async getAllDynamicSamples() {
-    const r = await fetch(`${API}/samples/load`); const d = await r.json();
-    const out = {};
-    for (const [g, v] of Object.entries(d)) { if (v.dynamic) out[g] = v.dynamic; }
-    return out;
-  }
-  async getAllMeta() {
-    const r = await fetch(`${API}/samples/meta`);
-    return r.json();
-  }
-  async clearAllSamples() {
-    await fetch(`${API}/samples/clear`, { method: 'DELETE' });
-  }
-  async getSamplePreview(gesture, n = 3) {
-    const r = await fetch(`${API}/samples/preview/${encodeURIComponent(gesture)}`);
-    return r.json();
-  }
-  async loadSetting(key) {
-    const r = await fetch(`${API}/settings/${key}`);
-    const d = await r.json();
-    return d.value ? JSON.parse(d.value) : null;
-  }
-  async saveSetting(key, value) {
-    await fetch(`${API}/settings`, { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ key, value: JSON.stringify(value) }) });
-  }
-  async getStats() {
-    const [meta, status] = await Promise.all([
-      fetch(`${API}/samples/meta`).then(r => r.json()),
-      fetch(`${API}/nn/status`).then(r => r.json()),
-    ]);
-    const gestures = Object.keys(meta);
-    return {
-      gestureCount: gestures.length,
-      totalStatic:  gestures.reduce((s, g) => s + (meta[g].static || 0), 0),
-      totalDynamic: gestures.reduce((s, g) => s + (meta[g].dynamic || 0), 0),
-    };
-  }
 }
 
 
@@ -1636,64 +1491,24 @@ class NLPService {
     return this.gemini.completeSentence(sm.getSentence());
   }
 
-  // ── Grammar correction — Gemini first, offline fallback ───────
+  // ── Grammar correction — Gemini first, backend fallback ──────
   async correctGrammar(sm) {
     // Try Gemini
     if (this.gemini && this.gemini.enabled && sm.getWordCount() >= 3) {
       var aiResult = await this.gemini.correctGrammar(sm.getSentence());
       if (aiResult) return aiResult;
     }
-    // Offline fallback
-    return this._offlineGrammar(sm.getSentence());
-  }
-
-  // ── Offline grammar correction (no Gemini needed) ─────────────
-  // Handles most common sign language grammar patterns
-  _offlineGrammar(sentence) {
-    if (!sentence || sentence.trim().length === 0) return null;
-    var words = sentence.trim().toLowerCase().split(/\s+/);
-    var corrected = words.slice();
-    var changed = false;
-
-    // Rule 1: Add "I" at start if sentence starts with action verb
-    var actionVerbs = ['want','need','like','love','hate','go','see','hear','feel','know','think'];
-    if (corrected.length > 0 && actionVerbs.indexOf(corrected[0]) >= 0) {
-      corrected.unshift('i');
-      changed = true;
+    // Backend fallback (Python rule-based, same logic as before)
+    try {
+      var res = await fetch(API + '/nlp/grammar', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sentence: sm.getSentence() })
+      });
+      var data = await res.json();
+      return data.corrected || null;
+    } catch(e) {
+      return null;
     }
-
-    // Rule 2: "me" at start → "I"
-    if (corrected[0] === 'me') { corrected[0] = 'i'; changed = true; }
-
-    // Rule 3: Capitalise first word
-    if (corrected.length > 0) {
-      corrected[0] = corrected[0].charAt(0).toUpperCase() + corrected[0].slice(1);
-    }
-
-    // Rule 4: "i " → "I " (anywhere in sentence)
-    for (var i = 1; i < corrected.length; i++) {
-      if (corrected[i] === 'i') { corrected[i] = 'I'; changed = true; }
-    }
-
-    // Rule 5: Remove duplicate consecutive words
-    var deduped = [corrected[0]];
-    for (var j = 1; j < corrected.length; j++) {
-      if (corrected[j].toLowerCase() !== corrected[j-1].toLowerCase()) {
-        deduped.push(corrected[j]);
-      } else {
-        changed = true;
-      }
-    }
-    corrected = deduped;
-
-    // Rule 6: Add period at end if missing
-    var last = corrected[corrected.length - 1];
-    if (last && '.!?'.indexOf(last.slice(-1)) < 0) {
-      corrected[corrected.length - 1] = last + '.';
-      changed = true;
-    }
-
-    return changed ? corrected.join(' ') : null;
   }
 
   // ── Learn from accepted sentence (Phase 2B) ───────────────────
@@ -3410,11 +3225,15 @@ var RecognitionController = (function() {
   };
 
   RecognitionController.prototype.quickTest = function(gestureName, gestureModel) {
-    var features = gestureModel.simulateStatic(gestureName);
-    // Pad to 41
-    while (features.length < 41) features.push(0);
-    this.sensor.setFromFeatures(features);
-    this._onGestureConfirmed(gestureName, 0.95, 'demo');
+    var self = this;
+    return gestureModel.simulateStaticAsync(gestureName, 1).then(function(samples) {
+      var features = (samples && samples[0]) ? samples[0] : [];
+      while (features.length < 41) features.push(0);
+      self.sensor.setFromFeatures(features);
+      self._onGestureConfirmed(gestureName, 0.95, 'demo');
+    }).catch(function() {
+      self._onGestureConfirmed(gestureName, 0.95, 'demo');
+    });
   };
 
   return RecognitionController;
@@ -3446,12 +3265,11 @@ class SequenceController{
 // LSTM abort: if hand lost mid dynamic recording, abort cleanly
 // No optional-chaining — Safari 12 safe
 class TrainingController {
-  constructor(staticNN, dynamicNN, gestureModel, sensorModel, db) {
+  constructor(staticNN, dynamicNN, gestureModel, sensorModel) {
     this.staticNN   = staticNN;
     this.dynamicNN  = dynamicNN;
     this.gm         = gestureModel;
     this.sensor     = sensorModel;
-    this.db         = db;
     this.isTraining = false;
     this.progress   = 0;
     this._camera    = null; // set by AppController after camera init
@@ -3753,10 +3571,9 @@ class AppController {
     this.appMode   = 'user';
     this._dbReady  = false;
 
-    this.db           = new DatabaseService();
     this.staticNN     = new NeuralNetwork('static');
     this.dynamicNN    = new NeuralNetwork('dynamic');
-    this.gestureModel = new GestureModel(APP_CONFIG.DEFAULT_GESTURES, this.db);
+    this.gestureModel = new GestureModel(APP_CONFIG.DEFAULT_GESTURES);
     this.sentenceModel= new SentenceModel();
     this.sensorModel  = new SensorModel();
 
@@ -3773,7 +3590,7 @@ class AppController {
     this.recogCtrl = new RecognitionController(this.staticNN, this.dynamicNN,
                        this.sensorModel, this.sentenceModel, this.nlp, this.tts, this.seqCtrl);
     this.trainCtrl = new TrainingController(this.staticNN, this.dynamicNN,
-                       this.gestureModel, this.sensorModel, this.db);
+                       this.gestureModel, this.sensorModel);
     this.view      = new AppView(root, this);
     // Wire camera reference to TrainingController for mirror augmentation
     this.trainCtrl.setCamera(this.camera);
@@ -4282,7 +4099,8 @@ class AppController {
 
   // ── Export / Import ───────────────────────────────────────────────────────
   async viewSampleDetails(gestureName) {
-    var preview = await this.db.getSamplePreview(gestureName, 3);
+    var preview = await fetch(API + '/samples/preview/' + encodeURIComponent(gestureName))
+      .then(function(r){ return r.json(); }).catch(function(){ return []; });
     window._samplePreview = preview;
     window._samplePreviewGesture = gestureName;
     this.view.render();
@@ -4322,7 +4140,10 @@ class AppController {
   async connectGemini(key) {
     var ok = await this.gemini.testConnection(key);
     StorageService.saveApiKey(key);
-    if (this.db) await this.db.saveSetting('apiKey', key);
+    fetch(API + '/settings', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({key: 'apiKey', value: JSON.stringify(key)})
+    }).catch(function(){});
     this.view.render();
     return ok;
   }

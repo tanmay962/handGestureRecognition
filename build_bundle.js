@@ -19,7 +19,6 @@ const FILES = [
   'models/SentenceModel.js',
   'models/SensorModel.js',
   'services/StorageService.js',
-  'services/DatabaseService.js',
   'services/CameraService.js',
   'services/MQTTService.js',
   'services/GeminiService.js',
