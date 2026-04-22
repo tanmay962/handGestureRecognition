@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-21T12:57:01.716Z
+// Built: 2026-04-22T05:43:32.199Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -50,6 +50,8 @@ var APP_CONFIG = {
     SPELL_PAUSE:           2000,
     // NLP debounce
     NLP_DEBOUNCE_MS:       300,
+    // Ensemble voting: average last N probability vectors before confirming
+    ENSEMBLE_WINDOW:       5,
   },
 
   MEDIAPIPE: {
@@ -934,6 +936,13 @@ var CameraService = (function() {
     this._lastFaceLM    = null;
     this._lastPoseLM    = null;
 
+    // Camera facing mode: 'user' (front) or 'environment' (back)
+    this.facingMode = 'user';
+    // Current live prediction for canvas overlay
+    this._currentPrediction = null;
+    // Status text shown on canvas when no prediction is active
+    this._statusText = null;
+
     // Persistent DOM elements — never destroyed by re-renders
     this.videoEl = document.createElement('video');
     this.videoEl.setAttribute('autoplay', '');
@@ -982,18 +991,65 @@ var CameraService = (function() {
     return Promise.all([
       initPromise,
       navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+        video: { facingMode: self.facingMode, width: { ideal: 640 }, height: { ideal: 480 } }
       }).then(function(stream) {
         self._stream = stream;
         self.videoEl.srcObject = stream;
+        self._applyMirror();
         return self.videoEl.play();
       })
     ]).then(function() {
       self.active = true;
       self._startLoop();
       eventBus.emit(Events.CAMERA_STARTED);
-      console.log('[Camera] started');
+      console.log('[Camera] started facingMode=' + self.facingMode);
     });
+  };
+
+  // ── Mirror transform (front camera = mirrored, back = normal) ────
+  CameraService.prototype._applyMirror = function() {
+    var t = this.facingMode === 'user' ? 'scaleX(-1)' : 'none';
+    this.videoEl.style.transform  = t;
+    this.canvasEl.style.transform = t;
+  };
+
+  // ── Switch between front / back camera ───────────────────────
+  CameraService.prototype.switchCamera = function() {
+    var self = this;
+    this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+    this._applyMirror();
+    this._currentPrediction = null;
+    if (!this.active || !this._stream) return Promise.resolve();
+    // Stop existing tracks then open new stream
+    this._stream.getTracks().forEach(function(t) { t.stop(); });
+    this._stream = null;
+    // Try 'exact' first (needed on some Android devices), fall back on failure
+    return navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: self.facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }
+    }).catch(function() {
+      return navigator.mediaDevices.getUserMedia({
+        video: { facingMode: self.facingMode, width: { ideal: 640 }, height: { ideal: 480 } }
+      });
+    }).then(function(stream) {
+      self._stream = stream;
+      self.videoEl.srcObject = stream;
+      return self.videoEl.play();
+    }).catch(function(err) {
+      // Roll back if new camera unavailable
+      self.facingMode = self.facingMode === 'user' ? 'environment' : 'user';
+      self._applyMirror();
+      console.warn('[Camera] switchCamera failed, reverting:', err);
+    });
+  };
+
+  // ── Set live prediction for canvas overlay ───────────────────
+  CameraService.prototype.setPrediction = function(name, conf, model) {
+    this._currentPrediction = name ? { name: name, conf: conf || 0, model: model || '' } : null;
+  };
+
+  // ── Set status text shown when no prediction is active ───────
+  CameraService.prototype.setStatus = function(text) {
+    this._statusText = text || null;
   };
 
   CameraService.prototype.stop = function() {
@@ -1210,7 +1266,9 @@ var CameraService = (function() {
   };
 
   CameraService.prototype._correctHandedness = function(label) {
-    if (!APP_CONFIG.MEDIAPIPE.MIRROR_DISPLAY) return label;
+    // Front camera is mirrored → flip handedness so dominant hand matches visual
+    // Back camera is NOT mirrored → keep MediaPipe's labels as-is
+    if (this.facingMode !== 'user') return label;
     return label === 'Left' ? 'Right' : 'Left';
   };
 
@@ -1271,6 +1329,65 @@ var CameraService = (function() {
           ctx.stroke();
         }
       });
+    }
+
+    // ── Status text overlay (when no prediction is active) ───
+    if (!this._currentPrediction && this._statusText) {
+      var cw2 = canvas.width, ch2 = canvas.height;
+      var sFontSize = Math.min(18, Math.max(11, cw2 * 0.033));
+      var bgGrad2 = ctx.createLinearGradient(0, ch2 * 0.78, 0, ch2);
+      bgGrad2.addColorStop(0, 'rgba(6,8,13,0)');
+      bgGrad2.addColorStop(1, 'rgba(6,8,13,0.75)');
+      ctx.fillStyle = bgGrad2;
+      ctx.fillRect(0, ch2 * 0.78, cw2, ch2 * 0.22);
+      ctx.save();
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.font        = 'bold ' + sFontSize + 'px "IBM Plex Mono",monospace';
+      ctx.shadowColor = 'rgba(0,0,0,0.9)';
+      ctx.shadowBlur  = 10;
+      ctx.fillStyle   = 'rgba(180,185,200,0.85)';
+      ctx.fillText(this._statusText, cw2 / 2, ch2 - 12);
+      ctx.restore();
+    }
+
+    // ── Prediction overlay drawn directly on canvas ───────────
+    if (this._currentPrediction) {
+      var pred = this._currentPrediction;
+      var cw = canvas.width, ch = canvas.height;
+      var nameFontSize = Math.min(60, Math.max(28, cw * 0.11));
+      var confFontSize = Math.round(nameFontSize * 0.28);
+
+      // Fade gradient at bottom so text is readable over any background
+      var bgGrad = ctx.createLinearGradient(0, ch * 0.58, 0, ch);
+      bgGrad.addColorStop(0, 'rgba(6,8,13,0)');
+      bgGrad.addColorStop(1, 'rgba(6,8,13,0.88)');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, ch * 0.58, cw, ch * 0.42);
+
+      ctx.save();
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'alphabetic';
+
+      // Gesture name — teal→purple gradient with glow
+      ctx.font        = 'bold ' + nameFontSize + 'px "IBM Plex Mono",monospace';
+      ctx.shadowColor = 'rgba(0,0,0,0.95)';
+      ctx.shadowBlur  = 18;
+      var nameGrad = ctx.createLinearGradient(cw * 0.2, 0, cw * 0.8, 0);
+      nameGrad.addColorStop(0, '#5eead4');
+      nameGrad.addColorStop(1, '#a78bfa');
+      ctx.fillStyle = nameGrad;
+      ctx.fillText(pred.name, cw / 2, ch - 30);
+
+      // Confidence + model tag
+      ctx.font        = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
+      ctx.fillStyle   = 'rgba(220,224,236,0.80)';
+      ctx.shadowBlur  = 6;
+      var confLabel   = (pred.conf * 100).toFixed(1) + '%';
+      if (pred.model) confLabel += '  [' + pred.model + ']';
+      ctx.fillText(confLabel, cw / 2, ch - 8);
+
+      ctx.restore();
     }
   };
 
@@ -1578,12 +1695,55 @@ class NLPService {
 
 // ═══ services/TTSService.js ═══
 // services/TTSService.js
-class TTSService{
-  constructor(){this.enabled=true;this.autoSpeak=true;this.rate=1}
-  speak(t){if(!this.enabled||!t||!window.speechSynthesis)return;window.speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.rate=this.rate;window.speechSynthesis.speak(u)}
-  speakIfAuto(t){if(this.autoSpeak)this.speak(t)}
-  stop(){if(window.speechSynthesis)window.speechSynthesis.cancel()}
-  setRate(r){this.rate=Math.max(.5,Math.min(2,r))}
+class TTSService {
+  constructor() {
+    this.enabled    = true;
+    this.autoSpeak  = true;
+    this.rate       = 1;
+    this._unlocked  = false;
+    // iOS / Android require a user gesture before speechSynthesis will work.
+    // We fire a silent utterance on the first touch/click to unlock the API.
+    var self = this;
+    var unlock = function() {
+      if (self._unlocked || !window.speechSynthesis) return;
+      try {
+        var u = new SpeechSynthesisUtterance('');
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+        // Cancel after a tick — just needed to warm up the engine
+        setTimeout(function() {
+          try { window.speechSynthesis.cancel(); } catch(e) {}
+        }, 100);
+      } catch(e) {}
+      self._unlocked = true;
+      document.removeEventListener('touchend', unlock);
+      document.removeEventListener('click',    unlock);
+    };
+    document.addEventListener('touchend', unlock, { once: true, passive: true });
+    document.addEventListener('click',    unlock, { once: true });
+  }
+
+  speak(t) {
+    if (!this.enabled || !t || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(t);
+    u.rate = this.rate;
+    // On some mobile browsers speak() must be called in a microtask
+    // after user-gesture unlock — a short delay makes it reliable
+    var self = this;
+    if (!self._unlocked) {
+      // Queue and wait for unlock; will fire once user taps
+      setTimeout(function() {
+        try { window.speechSynthesis.cancel(); window.speechSynthesis.speak(u); } catch(e) {}
+      }, 300);
+    } else {
+      try { window.speechSynthesis.speak(u); } catch(e) {}
+    }
+  }
+
+  speakIfAuto(t) { if (this.autoSpeak) this.speak(t); }
+  stop()         { if (window.speechSynthesis) try { window.speechSynthesis.cancel(); } catch(e) {} }
+  setRate(r)     { this.rate = Math.max(0.5, Math.min(2, r)); }
 }
 
 
@@ -1664,6 +1824,7 @@ function renderDetectTab(state){
     <div style="height:3px;background:var(--s1);position:relative;margin-bottom:8px"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>
     <div class="fr fr-center mb8" style="gap:6px;flex-wrap:wrap">
       ${camActive?Btn('■ Stop Camera','window._app.stopCamera()','r','sm'):Btn(cameraError?'⚠ Retry Camera':'📷 Start Camera','window._app.startCamera()','o','sm')}
+      ${camActive?Btn('⇄ Flip','window._app.switchCamera()','o','sm'):''}
       ${cameraError?`<div style="font-size:10px;color:var(--r);margin-top:6px;padding:6px 10px;background:var(--rD);border-radius:6px;border:1px solid var(--r)">⚠ ${cameraError}</div>`:''}
       ${!running?Btn('▶ Recognize','window._app.startRecognition()',camActive?'o':'g','',!trained):Btn('■ Stop','window._app.stopRecognition()','r')}
       <select onchange="window._app.setInputMode(this.value)" style="background:var(--s1);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 10px;font-family:inherit;font-size:10px;font-weight:600">
@@ -2245,7 +2406,7 @@ function renderSettingsTab(state) {
       'onclick="window._app.setAdminPin(document.getElementById(\'newPin\').value);' +
       'document.getElementById(\'newPin\').value=\'\';alert(\'PIN updated\')">Set</button>'
     ) +
-    SettingRow('Exit Admin', '', Btn('← User Mode', 'window._app.switchMode("user")', 'o', 'sm'))
+    SettingRow('Exit Admin', '', Btn('← User Mode', "window._app.switchMode('user')", 'o', 'sm'))
   );
 
   return out;
@@ -2370,9 +2531,9 @@ var RecognitionController = (function() {
     this._frameCount   = 0;
     this._predictEvery = APP_CONFIG.RECOGNITION.PREDICT_EVERY_N;
 
-    // ── Confidence smoothing ─────────────────────────────────
-    this._confHistory  = {}; // {gestureName: [conf, conf, ...]}
-    this._smoothWindow = APP_CONFIG.RECOGNITION.CONF_SMOOTH_WINDOW;
+    // ── Probability-vector ensemble ──────────────────────────
+    this._probHistory    = []; // [{probs:[], name:'', idx:0}, ...]
+    this._ensembleWindow = APP_CONFIG.RECOGNITION.ENSEMBLE_WINDOW || 5;
 
     // ── Time-based stability ─────────────────────────────────
     this._stableName      = null;
@@ -2470,8 +2631,15 @@ var RecognitionController = (function() {
     }).then(function(r) {
       return r.json();
     }).then(function(staticResult) {
-      // Confidence smoothing
-      var smoothedConf = self._smoothConfidence(staticResult.name, staticResult.conf);
+      // Ensemble: average last N probability vectors, take argmax of the mean
+      var ensembled = self._ensembleVote(staticResult);
+
+      // Broadcast live prediction to canvas overlay on every frame
+      if (ensembled && ensembled.name && ensembled.conf > 0.25) {
+        eventBus.emit(Events.GESTURE_PREDICTING, {
+          gesture: ensembled.name, conf: ensembled.conf, model: 'static'
+        });
+      }
 
       // Dynamic prediction if motion detected and buffer ready
       if (self.dNN.trained && self._dynamicActive && self._frameBuffer.length >= 20) {
@@ -2483,31 +2651,54 @@ var RecognitionController = (function() {
           body: JSON.stringify({ features: traj, model_type: 'dynamic' }),
         }).then(function(r) { return r.json(); })
           .then(function(dynResult) {
-            self._mergeAndStabilise(staticResult, smoothedConf, dynResult, features);
+            if (dynResult && dynResult.conf > APP_CONFIG.RECOGNITION.DYNAMIC_CONF_THRESH) {
+              eventBus.emit(Events.GESTURE_PREDICTING, {
+                gesture: dynResult.name, conf: dynResult.conf, model: 'dynamic'
+              });
+            }
+            self._mergeAndStabilise(ensembled, ensembled.conf, dynResult, features);
           }).catch(function() {
-            self._mergeAndStabilise(staticResult, smoothedConf, null, features);
+            self._mergeAndStabilise(ensembled, ensembled.conf, null, features);
           });
       } else {
-        self._mergeAndStabilise(staticResult, smoothedConf, null, features);
+        self._mergeAndStabilise(ensembled, ensembled.conf, null, features);
       }
     }).catch(function() {});
 
     this._lastFeatures = features.slice();
   };
 
-  // ── Confidence smoothing ─────────────────────────────────
-  RecognitionController.prototype._smoothConfidence = function(name, conf) {
-    if (!name) return 0;
-    if (!this._confHistory[name]) this._confHistory[name] = [];
-    this._confHistory[name].push(conf);
-    if (this._confHistory[name].length > this._smoothWindow) {
-      this._confHistory[name].shift();
+  // ── Probability-vector ensemble ──────────────────────────
+  // Averages last N full softmax outputs and argmaxes the mean.
+  // More accurate than per-name confidence averaging because it
+  // considers all classes simultaneously.
+  RecognitionController.prototype._ensembleVote = function(result) {
+    if (!result || !result.probs || result.probs.length === 0) {
+      return result || { name: 'Unknown', conf: 0, idx: -1, probs: [] };
     }
-    var sum = 0;
-    for (var i = 0; i < this._confHistory[name].length; i++) {
-      sum += this._confHistory[name][i];
+    this._probHistory.push({ probs: result.probs.slice(), name: result.name, idx: result.idx });
+    if (this._probHistory.length > this._ensembleWindow) {
+      this._probHistory.shift();
     }
-    return sum / this._confHistory[name].length;
+    if (this._probHistory.length < 2) return result;
+
+    // Element-wise average across history
+    var n = result.probs.length;
+    var avg = new Array(n).fill(0);
+    for (var h = 0; h < this._probHistory.length; h++) {
+      var pv = this._probHistory[h].probs;
+      for (var j = 0; j < n && j < pv.length; j++) {
+        avg[j] += pv[j] / this._probHistory.length;
+      }
+    }
+    var bestIdx = 0, bestConf = 0;
+    for (var k = 0; k < avg.length; k++) {
+      if (avg[k] > bestConf) { bestConf = avg[k]; bestIdx = k; }
+    }
+    // Look up name from the frontend gesture map
+    var bestName = (this.sNN && this.sNN.getName) ? this.sNN.getName(bestIdx) : result.name;
+    if (!bestName || bestName === 'Unknown') bestName = result.name;
+    return { name: bestName, conf: bestConf, idx: bestIdx, probs: avg };
   };
 
   // ── Motion detection ─────────────────────────────────────
@@ -2568,8 +2759,9 @@ var RecognitionController = (function() {
     if (!finalName) {
       this._stableName      = null;
       this._stableStartTime = null;
-      // Clear confidence history when hand lost
-      this._confHistory = {};
+      this._probHistory     = [];
+      // Clear canvas overlay when hand is lost
+      eventBus.emit(Events.GESTURE_PREDICTING, { gesture: null, conf: 0, model: '' });
       return;
     }
 
@@ -3068,10 +3260,11 @@ class TrainingController {
           body: JSON.stringify({ model_type:'static', inputs:sd.inputs, labels:sd.labels, epochs:ep2, lr:0.008 })
         });
         var sData = await sRes.json();
-        this.staticNN.accuracy = sData.accuracy;
-        this.staticNN.loss     = sData.loss;
-        this.staticNN.epochs   = sData.epochs;
-        this.staticNN.trained  = true;
+        this.staticNN.accuracy     = sData.accuracy;
+        this.staticNN.val_accuracy = sData.val_accuracy || 0;
+        this.staticNN.loss         = sData.loss;
+        this.staticNN.epochs       = sData.epochs;
+        this.staticNN.trained      = true;
         if (!window._perGestAcc) window._perGestAcc = {};
         window._perGestAcc.static = sData.per_gesture_acc || {};
         this.progress = Math.min(85, ((ep + ep2) / STATIC_EPOCHS) * 85);
@@ -3101,10 +3294,11 @@ class TrainingController {
           body: JSON.stringify({ model_type:'dynamic', inputs:dd.inputs, labels:dd.labels, epochs:dep2, lr:0.001 })
         });
         var dData = await dRes.json();
-        this.dynamicNN.accuracy = dData.accuracy;
-        this.dynamicNN.loss     = dData.loss;
-        this.dynamicNN.epochs   = dData.epochs;
-        this.dynamicNN.trained  = true;
+        this.dynamicNN.accuracy     = dData.accuracy;
+        this.dynamicNN.val_accuracy = dData.val_accuracy || 0;
+        this.dynamicNN.loss         = dData.loss;
+        this.dynamicNN.epochs       = dData.epochs;
+        this.dynamicNN.trained      = true;
         if (!window._perGestAcc) window._perGestAcc = {};
         window._perGestAcc.dynamic = dData.per_gesture_acc || {};
         this.progress = 85 + ((dep + dep2) / DYN_EPOCHS) * 15;
@@ -3227,6 +3421,21 @@ class AppController {
         self.mqttService.publishGesture(d.gesture, d.conf, d.model);
       }
       rr();
+    });
+    // Live prediction → camera canvas overlay
+    eventBus.on(Events.GESTURE_PREDICTING, function(d) {
+      self.camera.setPrediction(d.gesture || null, d.conf || 0, d.model || '');
+    });
+    // Clear overlay when recognition stops; show status hint
+    eventBus.on(Events.RECOG_STOPPED, function() {
+      self.camera.setPrediction(null, 0, '');
+      var trained = self.staticNN.trained || self.dynamicNN.trained;
+      self.camera.setStatus(trained ? 'TAP  ▶  TO RECOGNIZE' : 'TRAIN MODEL FIRST');
+      rr();
+    });
+    // Clear status when recognition starts
+    eventBus.on(Events.RECOG_STARTED, function() {
+      self.camera.setStatus('DETECTING...');
     });
     eventBus.on(Events.TRAIN_PROGRESS,     rr);
     eventBus.on(Events.TRAIN_COMPLETE,     rr);
@@ -3423,15 +3632,24 @@ class AppController {
 
 
   async _autoCamera() {
-    if (!this.camera.active) {
+    // Guard: skip if already starting (prevents concurrent starts causing play() abort)
+    if (!this.camera.active && !this._cameraStarting) {
       if (typeof Holistic === 'undefined') {
         this._cameraError = 'MediaPipe failed to load from CDN. Check your internet connection and reload.';
         this.view.render();
         return;
       }
+      this._cameraStarting = true;
       try {
         this._cameraError = null;
         await this.camera.start();
+        var trained = this.staticNN.trained || this.dynamicNN.trained;
+        if (trained && !this.recogCtrl.running) {
+          this.recogCtrl.start();
+          // RECOG_STARTED event will set status to 'DETECTING...'
+        } else {
+          this.camera.setStatus(trained ? 'TAP  ▶  TO RECOGNIZE' : 'TRAIN MODEL FIRST');
+        }
         this.view.render();
       } catch(e) {
         console.warn('[App] Camera:', e);
@@ -3443,18 +3661,30 @@ class AppController {
           this._cameraError = 'Camera error: ' + (e && e.message ? e.message : String(e));
         }
         this.view.render();
+      } finally {
+        this._cameraStarting = false;
       }
     }
     this._mountCamera();
   }
   async startCamera() { await this._autoCamera(); this.trainCtrl.setCamera(this.camera); }
   stopCamera()       { this.camera.stop(); this.view.render(); }
+  async switchCamera() { await this.camera.switchCamera(); this.view.render(); }
   _mountCamera() {
     if (!this.camera.active) return;
     var main  = document.getElementById('vidContainer');
     var train = document.getElementById('trainVidContainer');
     if (main)  this.camera.mountInto(main);
     else if (train) this.camera.mountInto(train);
+    // Ensure status text matches current state
+    if (!this.camera._statusText && !this.camera._currentPrediction) {
+      if (this.recogCtrl.running) {
+        this.camera.setStatus('DETECTING...');
+      } else {
+        var trained = this.staticNN.trained || this.dynamicNN.trained;
+        this.camera.setStatus(trained ? 'TAP  ▶  TO RECOGNIZE' : 'TRAIN MODEL FIRST');
+      }
+    }
   }
 
   // ── Recognition ───────────────────────────────────────────────────────────

@@ -103,7 +103,7 @@ function renderSettingsTab(state) {
       'onclick="window._app.setAdminPin(document.getElementById(\'newPin\').value);' +
       'document.getElementById(\'newPin\').value=\'\';alert(\'PIN updated\')">Set</button>'
     ) +
-    SettingRow('Exit Admin', '', Btn('← User Mode', 'window._app.switchMode("user")', 'o', 'sm'))
+    SettingRow('Exit Admin', '', Btn('← User Mode', "window._app.switchMode('user')", 'o', 'sm'))
   );
 
   return out;

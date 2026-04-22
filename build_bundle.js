@@ -93,7 +93,7 @@ const checks = [
   ['Pose features',           '_extractPoseFeatures'],
   ['SensorModel 41',         'features.length < 41'],
   ['Rate limiting',           '_predictEvery'],
-  ['Confidence smoothing',    '_smoothConfidence'],
+  ['Ensemble voting',         '_ensembleVote'],
   ['Time-based stability',    '_stableStartTime'],
   ['Separate cooldowns',      'COOLDOWN_DIFF_LETTER'],
   ['Motion detection',        '_detectMotion'],

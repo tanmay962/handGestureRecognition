@@ -292,12 +292,14 @@ export class AppController {
 
 
   async _autoCamera() {
-    if (!this.camera.active) {
+    // Guard: skip if already starting (prevents concurrent starts causing play() abort)
+    if (!this.camera.active && !this._cameraStarting) {
       if (typeof Holistic === 'undefined') {
         this._cameraError = 'MediaPipe failed to load from CDN. Check your internet connection and reload.';
         this.view.render();
         return;
       }
+      this._cameraStarting = true;
       try {
         this._cameraError = null;
         await this.camera.start();
@@ -319,6 +321,8 @@ export class AppController {
           this._cameraError = 'Camera error: ' + (e && e.message ? e.message : String(e));
         }
         this.view.render();
+      } finally {
+        this._cameraStarting = false;
       }
     }
     this._mountCamera();
