@@ -2,91 +2,140 @@
 import {APP_CONFIG} from '../config/app.config.js';
 import {FingerBars} from './components/index.js';
 
-export function renderUserMode(state){
-  const {camActive,cameraError,running,displayText,spelling,suggestions,wordSuggestions,completion,contextState,staticTrained,dynamicTrained}=state;
-  const trained=staticTrained||dynamicTrained;
+export function renderUserMode(state) {
+  var {
+    camActive, cameraError, running, displayText, spelling,
+    suggestions, wordSuggestions, completion, contextState,
+    staticTrained, dynamicTrained, inputMode
+  } = state;
 
-  return`
-  <div style="padding:12px 0 6px;display:flex;align-items:center;justify-content:space-between">
-    <div>
-      <div style="font-size:10px;letter-spacing:.2em;color:var(--g);font-weight:700">✋ SIGNLENS</div>
-      <div style="font-size:16px;font-weight:700">Gesture <span style="color:var(--g)">Communication</span></div>
-    </div>
-    <button class="btn btn-o btn-sm" onclick="document.getElementById('userSettings').style.display=document.getElementById('userSettings').style.display==='none'?'block':'none'" style="font-size:16px;padding:8px">⚙</button>
-  </div>
+  var trained = staticTrained || dynamicTrained;
 
-  <!-- Mini settings (hidden by default) -->
-  <div id="userSettings" style="display:none" class="cd">
-    <div class="srow"><div><div class="srow-label">Speech Rate</div></div>
-      <input type="range" min=".5" max="2" step=".1" value="${state.tts.rate}" oninput="window._app.setTTSRate(parseFloat(this.value))" style="width:100px;accent-color:var(--g)">
-    </div>
-    <div class="srow"><div><div class="srow-label">Input</div></div>
-      <select onchange="window._app.setInputMode(this.value)" style="background:var(--s1);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:4px 8px;font-family:inherit;font-size:11px">
-        <option value="camera" ${state.inputMode==='camera'?'selected':''}>Camera</option>
-        <option value="glove" ${state.inputMode==='glove'?'selected':''}>Glove</option>
-        <option value="both" ${state.inputMode==='both'?'selected':''}>Both</option>
-      </select>
-    </div>
-    <div style="border-top:1px solid var(--brd);padding-top:10px;margin-top:8px">
-      <button class="btn btn-o btn-sm" onclick="const pin=prompt('Enter Admin PIN:');if(pin&&window._app.checkAdminPin(pin)){window._app.switchMode('admin')}else if(pin){alert('Wrong PIN')}">🔒 Admin Mode</button>
-    </div>
-  </div>
+  return (
+    _renderUserHeader(state) +
+    _renderUserSettings(state, inputMode) +
+    _renderUserCamera(camActive, cameraError, trained, running) +
+    _renderUserSentence(state, displayText, spelling, suggestions, wordSuggestions, completion, contextState) +
+    _renderUserFingers()
+  );
+}
 
-  <!-- Camera Feed (large) -->
-  <div class="cd" style="padding:0;overflow:hidden;position:relative">
-    <div class="vid-wrap" style="min-height:300px">
-      <div id="vidContainer" style="width:100%;height:100%"></div>
-      <div class="vid-badges">
-        <span class="bg bg-g" id="fpsB">-- FPS</span>
-        <span class="bg bg-p" id="handB">No Hand</span>
-      </div>
-      <div class="vid-gesture" id="gestDisp" style="display:none">
-        <div class="gesture-name" id="gestName"></div>
-        <div class="gesture-conf" id="gestConf"></div>
-      </div>
-      ${!camActive?'<div class="vid-overlay"><div style="font-size:48px">✋</div><div style="font-size:12px;letter-spacing:.1em">TAP START</div></div>':''}
-    </div>
-    <!-- System gesture progress bar -->
-    <div style="height:3px;background:var(--s1);position:relative"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>
-  </div>
+function _renderUserHeader(state) {
+  return '<div style="padding:12px 0 8px;display:flex;align-items:center;justify-content:space-between">' +
+    '<div>' +
+      '<div style="font-size:9px;letter-spacing:.2em;color:var(--g);font-weight:700">✋ GESTURE DETECTION</div>' +
+      '<div style="font-size:15px;font-weight:700">Sign to <span style="color:var(--g)">Communicate</span></div>' +
+    '</div>' +
+    '<button class="btn btn-o btn-sm" ' +
+      'onclick="document.getElementById(\'userSettings\').style.display=' +
+        'document.getElementById(\'userSettings\').style.display===\'none\'?\'block\':\'none\'" ' +
+      'style="font-size:16px;padding:7px">⚙</button>' +
+  '</div>';
+}
 
-  <!-- Start/Stop -->
-  <div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px">
-    ${camActive?`<button class="btn btn-r" onclick="window._app.stopCamera()">■ Stop Camera</button>`
-      :`<button class="btn btn-o" onclick="window._app.startCamera()">${cameraError?'⚠ Retry Camera':'📷 Start Camera'}</button>`}
-    ${cameraError?`<div style="font-size:10px;color:var(--r);margin-top:6px;padding:8px 12px;background:rgba(251,113,133,.1);border-radius:8px;border:1px solid var(--r);text-align:center">⚠ ${cameraError}</div>`:''}
-    ${trained&&!running?`<button class="btn btn-g" onclick="window._app.startRecognition()">▶ Recognize</button>`:''}
-    ${running?`<button class="btn btn-r" onclick="window._app.stopRecognition()">■ Stop</button>`:''}
-  </div>
+function _renderUserSettings(state, inputMode) {
+  return '<div id="userSettings" style="display:none" class="cd">' +
+    '<div class="srow"><div><div class="srow-label">Speech rate</div></div>' +
+      '<input type="range" min=".5" max="2" step=".1" value="' + state.tts.rate + '" ' +
+        'oninput="window._app.setTTSRate(parseFloat(this.value))" ' +
+        'style="width:100px;accent-color:var(--g)">' +
+    '</div>' +
+    '<div class="srow"><div><div class="srow-label">Input source</div></div>' +
+      '<select onchange="window._app.setInputMode(this.value)" ' +
+        'style="background:var(--s1);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:4px 8px;font-family:inherit;font-size:11px">' +
+        '<option value="camera" ' + (inputMode === 'camera' ? 'selected' : '') + '>Camera</option>' +
+        '<option value="glove"  ' + (inputMode === 'glove'  ? 'selected' : '') + '>Glove</option>' +
+        '<option value="both"   ' + (inputMode === 'both'   ? 'selected' : '') + '>Both</option>' +
+      '</select>' +
+    '</div>' +
+    '<div style="padding-top:10px;margin-top:4px">' +
+      '<button class="btn btn-o btn-sm" onclick="' +
+        'var pin=prompt(\'Enter admin PIN:\');' +
+        'if(pin&&window._app.checkAdminPin(pin)){window._app.switchMode(\'admin\')}' +
+        'else if(pin){alert(\'Wrong PIN\')}' +
+      '">🔒 Admin</button>' +
+    '</div>' +
+  '</div>';
+}
 
-  <!-- Sentence Display (large, prominent) -->
-  <div class="cd">
-    <div style="background:var(--s1);border:1px solid var(--brd);border-radius:10px;padding:16px 20px;min-height:56px;font-size:20px;font-weight:600;line-height:1.5;margin-bottom:12px;color:${displayText?'var(--tx)':'var(--dm)'}">
-      ${displayText||'Start signing to communicate...'}<span class="cursor"></span>
-    </div>
+function _renderUserCamera(camActive, cameraError, trained, running) {
+  return '<div class="cd" style="padding:0;overflow:hidden;position:relative;margin-bottom:10px">' +
+    '<div class="vid-wrap" style="min-height:280px">' +
+      '<div id="vidContainer" style="width:100%;height:100%"></div>' +
+      '<div class="vid-badges">' +
+        '<span class="bg bg-g" id="fpsB">-- FPS</span>' +
+        '<span class="bg bg-d" id="handB">No Hand</span>' +
+      '</div>' +
+      '<div class="vid-gesture" id="gestDisp" style="display:none">' +
+        '<div class="gesture-name" id="gestName"></div>' +
+        '<div class="gesture-conf" id="gestConf"></div>' +
+      '</div>' +
+      (!camActive ? '<div class="vid-overlay"><div style="font-size:40px">✋</div><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
+    '</div>' +
+    '<div style="height:3px;background:var(--s2)"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>' +
+  '</div>' +
 
-    ${spelling?`<div style="font-size:10px;color:var(--p);letter-spacing:.12em;margin-bottom:6px">SPELLING: ${spelling.toUpperCase()}_</div>`:''}
+  '<div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px;flex-wrap:wrap">' +
+    (camActive
+      ? '<button class="btn btn-r" onclick="window._app.stopCamera()">■ Stop Camera</button>'
+      : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? '⚠ Retry Camera' : '📷 Start Camera') + '</button>') +
+    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">⚠ ' + cameraError + '</div>' : '') +
+    (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">▶ Recognize</button>' : '') +
+    (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">■ Stop</button>' : '') +
+  '</div>';
+}
 
-    <!-- Word suggestions from spelling -->
-    ${wordSuggestions.length?`<div style="margin-bottom:8px"><div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">WORD MATCHES (hold 1-${Math.min(5,wordSuggestions.length)} fingers to select)</div>
-      <div class="suggs">${wordSuggestions.map((w,i)=>`<span class="sugg ai"><span style="font-size:8px;opacity:.6">${i+1}.</span> ${w}</span>`).join('')}</div></div>`:''}
+function _renderUserSentence(state, displayText, spelling, suggestions, wordSuggestions, completion, contextState) {
+  return '<div class="cd">' +
+    '<div style="background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:14px 16px;' +
+      'min-height:52px;font-size:19px;font-weight:600;line-height:1.5;margin-bottom:12px;' +
+      'color:' + (displayText ? 'var(--tx)' : 'var(--dm)') + '">' +
+      (displayText || 'Start signing to communicate…') +
+      '<span class="cursor"></span>' +
+    '</div>' +
 
-    <!-- Sentence-level suggestions -->
-    ${!spelling&&suggestions.length?`<div><div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">${state.geminiEnabled?'AI':'LOCAL'} PREDICTIONS (hold fingers to select)</div>
-      <div class="suggs">${suggestions.map((w,i)=>`<span class="sugg${state.geminiEnabled?' ai':''}"><span style="font-size:8px;opacity:.6">${i+1}.</span> ${w}</span>`).join('')}</div></div>`:''}
+    (spelling ? '<div style="font-size:10px;color:var(--p);letter-spacing:.1em;margin-bottom:6px">SPELLING: ' + spelling.toUpperCase() + '_</div>' : '') +
 
-    <!-- Completion -->
-    ${completion&&completion!==state.sentence?`<div class="completion" onclick="window._app.acceptCompletion()"><div class="completion-label">✨ AI suggests</div><div class="completion-text">"${completion}"</div></div>`:''}
+    (wordSuggestions.length
+      ? '<div style="margin-bottom:8px">' +
+          '<div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">WORD MATCHES</div>' +
+          '<div class="suggs">' +
+            wordSuggestions.map(function(w, i) {
+              return '<span class="sugg ai"><span style="font-size:8px;opacity:.6">' + (i + 1) + '.</span> ' + w + '</span>';
+            }).join('') +
+          '</div>' +
+        '</div>'
+      : '') +
 
-    <!-- Context state indicator -->
-    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px">
-      <span style="font-size:9px;color:var(--dm);letter-spacing:.1em">${contextState} ${state.geminiEnabled?'· GEMINI AI':''}</span>
-      <div style="font-size:9px;color:var(--dm)">✊=Speak  🖐=Clear  👎=Undo</div>
-    </div>
-  </div>
+    (!spelling && suggestions.length
+      ? '<div>' +
+          '<div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">' +
+            (state.geminiEnabled ? 'AI' : 'LOCAL') + ' PREDICTIONS' +
+          '</div>' +
+          '<div class="suggs">' +
+            suggestions.map(function(w, i) {
+              return '<span class="sugg' + (state.geminiEnabled ? ' ai' : '') + '">' +
+                '<span style="font-size:8px;opacity:.6">' + (i + 1) + '.</span> ' + w +
+              '</span>';
+            }).join('') +
+          '</div>' +
+        '</div>'
+      : '') +
 
-  <!-- Finger bars (compact) -->
-  <div class="cd">
-    ${FingerBars(APP_CONFIG.FINGER_NAMES,APP_CONFIG.FINGER_COLORS)}
-  </div>`;
+    (completion && completion !== state.sentence
+      ? '<div class="completion" onclick="window._app.acceptCompletion()">' +
+          '<div class="completion-label">✨ AI suggests</div>' +
+          '<div class="completion-text">"' + completion + '"</div>' +
+        '</div>'
+      : '') +
+
+    '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px">' +
+      '<span style="font-size:9px;color:var(--dm);letter-spacing:.1em">' + contextState + ' ' + (state.geminiEnabled ? '· Gemini AI' : '') + '</span>' +
+      '<div style="font-size:9px;color:var(--dm)">✊=Speak · 🖐=Clear · 👎=Undo</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function _renderUserFingers() {
+  return '<div class="cd">' + FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS) + '</div>';
 }

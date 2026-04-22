@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-22T06:37:38.250Z
+// Built: 2026-04-22T09:42:41.826Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -325,17 +325,79 @@ const clearEl = el => { while (el && el.firstChild) el.removeChild(el.firstChild
 
 
 // ═══ views/components/index.js ═══
-// views/components/index.js — Reusable UI components
-const Badge=(t,v='g')=>`<span class="bg bg-${v}">${t}</span>`;
-const DotBadge=(t,v='g',pulse=false)=>`<span class="bg bg-${v}"><span class="dot dot-${v}${pulse?' dot-pulse':''}"></span>${t}</span>`;
-const Btn=(label,onclick,v='g',size='',disabled=false)=>`<button class="btn btn-${v}${size?' btn-'+size:''}" onclick="${onclick}"${disabled?' disabled':''}>${label}</button>`;
-const Card=(label,body,style='')=>`<div class="cd"${style?` style="${style}"`:''}>` + (label?`<div class="cd-label">${label}</div>`:'')+body+'</div>';
-const Toggle=(on,onclick)=>`<div class="toggle" style="background:${on?'var(--g)':'var(--brd)'}" onclick="${onclick}"><div class="knob" style="background:${on?'var(--bg)':'var(--mx)'};left:${on?'21px':'3px'}"></div></div>`;
-const Bar=(pct,color='var(--g)')=>`<div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>`;
-const StatBox=(val,label,color='var(--g)')=>`<div class="stat"><div class="stat-v" style="color:${color}">${val}</div><div class="stat-l">${label}</div></div>`;
-const SettingRow=(label,desc,ctrl)=>`<div class="srow"><div><div class="srow-label">${label}</div>${desc?`<div class="srow-desc">${desc}</div>`:''}</div>${ctrl}</div>`;
-const LogEntry=(e,op=1)=>{const cc=e.conf>.9?'var(--g)':e.conf>.7?'var(--a)':'var(--r)';return`<div class="log-entry" style="opacity:${op}"><div class="fr g5">${Badge(e.gesture,'g')}${e.combo?Badge('⚡'+e.combo,'p'):''}${e.model?`<span style="font-size:8px;color:var(--dm)">[${e.model}]</span>`:''}</div><div class="fr" style="gap:10px"><span style="font-size:11px;font-weight:700;color:${cc}">${(e.conf*100).toFixed(1)}%</span><span style="font-size:9px;color:var(--dm)">${e.time.toLocaleTimeString()}</span></div></div>`};
-const FingerBars=(names,colors)=>`<div class="fgrid">${names.map((n,i)=>`<div class="fcol"><div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:${colors[i]}"></div></div><div class="fname" style="color:${colors[i]}">${n}</div><div class="fval" id="fv${i}">0%</div></div>`).join('')}</div>`;
+// views/components/index.js
+// Reusable UI primitives. Small functions that just return HTML strings.
+// Kept simple — no state, no lifecycle, just string → string.
+const Badge = (text, variant) =>
+  `<span class="bg bg-${variant || 'g'}">${text}</span>`;
+
+const DotBadge = (text, variant, pulse) => {
+  variant = variant || 'g';
+  return `<span class="bg bg-${variant}">` +
+    `<span class="dot dot-${variant}${pulse ? ' dot-pulse' : ''}"></span>` +
+    `${text}</span>`;
+};
+
+// variant: 'g' | 'p' | 'r' | 'a' | 'o' | 'ghost' (default: outline 'o')
+const Btn = (label, onclick, variant, size, disabled) =>
+  `<button class="btn${variant ? ' btn-' + variant : ' btn-o'}${size ? ' btn-' + size : ''}" ` +
+  `onclick="${onclick}"${disabled ? ' disabled' : ''}>${label}</button>`;
+
+// title is optional — pass '' or null to get a plain container
+const Card = (title, body, style) =>
+  `<div class="cd"${style ? ` style="${style}"` : ''}>` +
+    (title ? `<div class="cd-label">${title}</div>` : '') +
+    body +
+  `</div>`;
+
+const Toggle = (on, onclick) =>
+  `<div class="toggle" style="background:${on ? 'var(--g)' : 'var(--s2)'}" onclick="${onclick}">` +
+    `<div class="knob" style="background:${on ? 'var(--bg)' : 'var(--dm)'};left:${on ? '21px' : '3px'}"></div>` +
+  `</div>`;
+
+const Bar = (pct, color) =>
+  `<div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:${color || 'var(--g)'}"></div></div>`;
+
+const StatBox = (value, label, color) =>
+  `<div class="stat">` +
+    `<div class="stat-v" style="color:${color || 'var(--g)'}">${value}</div>` +
+    `<div class="stat-l">${label}</div>` +
+  `</div>`;
+
+const SettingRow = (label, desc, control) =>
+  `<div class="srow">` +
+    `<div><div class="srow-label">${label}</div>${desc ? `<div class="srow-desc">${desc}</div>` : ''}</div>` +
+    control +
+  `</div>`;
+
+const LogEntry = (entry, opacity) => {
+  opacity = opacity !== undefined ? opacity : 1;
+  var confColor = entry.conf > 0.9 ? 'var(--g)' : entry.conf > 0.7 ? 'var(--a)' : 'var(--r)';
+  return `<div class="log-entry" style="opacity:${opacity}">` +
+    `<div class="fr g5">` +
+      Badge(entry.gesture, 'g') +
+      (entry.combo ? Badge('⚡' + entry.combo, 'p') : '') +
+      (entry.model ? `<span style="font-size:8px;color:var(--dm)">[${entry.model}]</span>` : '') +
+    `</div>` +
+    `<div class="fr g5">` +
+      `<span style="font-size:12px;font-weight:700;color:${confColor}">${(entry.conf * 100).toFixed(1)}%</span>` +
+      `<span style="font-size:9px;color:var(--dm)">${entry.time.toLocaleTimeString()}</span>` +
+    `</div>` +
+  `</div>`;
+};
+
+// Five vertical bars showing finger curl 0–100%.
+// IDs fb0–fb4 and fv0–fv4 are updated directly by AppController on each frame.
+const FingerBars = (names, colors) =>
+  `<div class="fgrid">` +
+    names.map(function(name, i) {
+      return `<div class="fcol">` +
+        `<div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:${colors[i]}"></div></div>` +
+        `<div class="fname" style="color:${colors[i]}">${name}</div>` +
+        `<div class="fval" id="fv${i}">0%</div>` +
+      `</div>`;
+    }).join('') +
+  `</div>`;
 
 
 // ═══ models/NeuralNetwork.js ═══
@@ -1748,8 +1810,7 @@ class TTSService {
 
 
 // ═══ views/AppView.js ═══
-// views/AppView.js — Gesture Detection v1.0
-// Clean header, 4 tabs only: Detect | Train | Sequences | Settings
+// views/AppView.js
 var AppView = (function() {
   function AppView(root, ctrl) {
     this.root = root;
@@ -1763,41 +1824,10 @@ var AppView = (function() {
     if (state.mode === 'user') {
       html = renderUserMode(state);
     } else {
-      // Header
-      html += '<div class="hdr">' +
-        '<div>' +
-          '<div class="hdr-brand">✋ Gesture Detection ' +
-            Badge('v1.0', 'p') + ' ' +
-            (state.geminiEnabled ? Badge('Gemini', 'a') + ' ' : '') +
-          '</div>' +
-          '<div class="hdr-title">Hand Gesture Recognition <em>System</em></div>' +
-        '</div>' +
-        '<div class="hdr-badges">' +
-          Badge(state.camActive ? '📷 Live' : '📷 Off',   state.camActive      ? 'g' : 'd') + ' ' +
-          Badge(state.staticTrained  ? 'MLP ✓'  : 'MLP ✗',  state.staticTrained  ? 'g' : 'd') + ' ' +
-          Badge(state.dynamicTrained ? 'LSTM ✓' : 'LSTM ✗', state.dynamicTrained ? 'p' : 'd') +
-        '</div>' +
-      '</div>';
-
-      // Tabs
-      html += '<div class="tabs">';
-      for (var i = 0; i < APP_CONFIG.TABS_ADMIN.length; i++) {
-        var t = APP_CONFIG.TABS_ADMIN[i];
-        var active = state.tab === t.id ? ' active' : '';
-        html += '<button class="tab' + active + '" data-tab="' + t.id + '" onclick="window._app.switchTab(this.dataset.tab)">' + t.label + '</button>';
-      }
-      html += '</div>';
-
-      // Tab content
-      switch (state.tab) {
-        case 'detect':    html += renderDetectTab(state);    break;
-        case 'train':     html += renderTrainTab(state);     break;
-        case 'sequences': html += renderSequenceTab(state);  break;
-        case 'settings':  html += renderSettingsTab(state);  break;
-        default:          html += renderDetectTab(state);
-      }
-
-      html += '<div class="footer">GESTURE DETECTION v1.0 · MLP + LSTM · HOLISTIC · GEMINI · PWA</div>';
+      html += _renderHeader(state);
+      html += _renderTabs(state);
+      html += _renderTabContent(state);
+      html += '<div class="footer">gesture-detection · MLP + LSTM · holistic · gemini</div>';
     }
 
     this.root.innerHTML = html;
@@ -1807,63 +1837,206 @@ var AppView = (function() {
   return AppView;
 })();
 
+function _renderHeader(state) {
+  var camBadge    = state.camActive ? '<span class="bg bg-g"><span class="dot dot-g dot-pulse"></span>Live</span>' : '';
+  var modelBadge  = (state.staticTrained || state.dynamicTrained)
+    ? '<span class="bg bg-g">Model ready</span>'
+    : '<span class="bg bg-d">No model</span>';
+  var geminiBadge = state.geminiEnabled ? '<span class="bg bg-a">Gemini</span>' : '';
+
+  return '<div class="hdr">' +
+    '<div>' +
+      '<div class="hdr-brand">✋ Gesture Detection</div>' +
+      '<div class="hdr-title">Hand Recognition <em>System</em></div>' +
+    '</div>' +
+    '<div class="hdr-badges">' +
+      camBadge +
+      modelBadge +
+      geminiBadge +
+    '</div>' +
+  '</div>';
+}
+
+function _renderTabs(state) {
+  var tabs = APP_CONFIG.TABS_ADMIN;
+  var html = '<div class="tabs">';
+  for (var i = 0; i < tabs.length; i++) {
+    var t = tabs[i];
+    var active = state.tab === t.id ? ' active' : '';
+    html += '<button class="tab' + active + '" onclick="window._app.switchTab(\'' + t.id + '\')">' + t.label + '</button>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function _renderTabContent(state) {
+  switch (state.tab) {
+    case 'detect':    return renderDetectTab(state);
+    case 'train':     return renderTrainTab(state);
+    case 'sequences': return renderSequenceTab(state);
+    case 'settings':  return renderSettingsTab(state);
+    default:          return renderDetectTab(state);
+  }
+}
+
 
 // ═══ views/DetectView.js ═══
-// views/DetectView.js — Gesture Detection v1.0
-function renderDetectTab(state){
-  const{camActive,cameraError,running,displayText,spelling,suggestions,wordSuggestions,completion,log,gestures,geminiEnabled,staticTrained,dynamicTrained,inputMode,contextState}=state;
-  const trained=staticTrained||dynamicTrained;
-  return`
-  ${Card(`<span>Live Recognition</span><span class="flex"></span>${DotBadge(running||camActive?'Active':'Idle',running||camActive?'g':'a',running||camActive)}${contextState!=='IDLE'?Badge(contextState,'p'):''}`,
-    `<div class="vid-wrap" style="min-height:260px">
-      <div id="vidContainer" style="width:100%;height:100%"></div>
-      <div class="vid-badges"><span class="bg bg-g" id="fpsB">-- FPS</span><span class="bg bg-p" id="handB">No Hand</span></div>
-      <div class="vid-gesture" id="gestDisp" style="display:none"><div class="gesture-name" id="gestName"></div><div class="gesture-conf" id="gestConf"></div></div>
-      ${!camActive?'<div class="vid-overlay"><div style="font-size:40px">📷</div><div style="font-size:11px;letter-spacing:.1em">START CAMERA</div></div>':''}
-    </div>
-    <div style="height:3px;background:var(--s1);position:relative;margin-bottom:8px"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>
-    <div class="fr fr-center mb8" style="gap:6px;flex-wrap:wrap">
-      ${camActive?Btn('■ Stop Camera','window._app.stopCamera()','r','sm'):Btn(cameraError?'⚠ Retry Camera':'📷 Start Camera','window._app.startCamera()','o','sm')}
-      ${camActive?Btn('⇄ Flip','window._app.switchCamera()','o','sm'):''}
-      ${cameraError?`<div style="font-size:10px;color:var(--r);margin-top:6px;padding:6px 10px;background:var(--rD);border-radius:6px;border:1px solid var(--r)">⚠ ${cameraError}</div>`:''}
-      ${!running?Btn('▶ Recognize','window._app.startRecognition()',camActive?'o':'g','',!trained):Btn('■ Stop','window._app.stopRecognition()','r')}
-      <select onchange="window._app.setInputMode(this.value)" style="background:var(--s1);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 10px;font-family:inherit;font-size:10px;font-weight:600">
-        <option value="camera"${inputMode==='camera'?' selected':''}>📷 Camera</option>
-        <option value="glove"${inputMode==='glove'?' selected':''}>🧤 Glove</option>
-        <option value="both"${inputMode==='both'?' selected':''}>⚡ Both</option>
-      </select>
-    </div>`,'position:relative;overflow:hidden')}
+// views/DetectView.js
+function renderDetectTab(state) {
+  var {
+    camActive, cameraError, running, displayText, spelling,
+    suggestions, wordSuggestions, completion, log, gestures,
+    geminiEnabled, staticTrained, dynamicTrained, inputMode, contextState
+  } = state;
 
-  ${Card('👆 Finger Detection',FingerBars(APP_CONFIG.FINGER_NAMES,APP_CONFIG.FINGER_COLORS))}
+  var trained = staticTrained || dynamicTrained;
 
-  ${Card(`<span>Sentence Builder</span><span class="flex"></span>${geminiEnabled?Badge('Gemini AI','a'):Badge('Local','d')}${Btn('🔊','window._app.speakSentence()','o','sm',!state.sentence)}`,
-    `<div class="sent-box${displayText?'':' empty'}">${displayText||'Signs appear here...'}<span class="cursor"></span></div>
-    ${spelling?`<div style="font-size:10px;color:var(--p);margin-bottom:6px">SPELLING: <strong>${spelling.toUpperCase()}_</strong></div>`:''}
-    ${wordSuggestions.length?`<div class="mb8"><div style="font-size:9px;color:var(--a);letter-spacing:.1em;margin-bottom:4px">WORD MATCHES</div><div class="suggs">${wordSuggestions.map((w,i)=>`<span class="sugg ai" onclick="window._app.addSuggestionWord('${w}')"><span style="font-size:8px;opacity:.5">${i+1}</span> ${w}</span>`).join('')}</div></div>`:''}
-    ${completion&&completion!==state.sentence?`<div class="completion" onclick="window._app.acceptCompletion()"><div class="completion-label">✨ Gemini suggests</div><div class="completion-text">"${completion}"</div></div>`:''}
-    <div style="font-size:9px;color:var(--mx);letter-spacing:.1em;margin-bottom:6px">${geminiEnabled?'AI':'LOCAL'} NEXT WORD</div>
-    <div class="suggs">${suggestions.map((w,i)=>`<span class="sugg${geminiEnabled?' ai':''}" onclick="window._app.addSuggestionWord('${w}')"><span style="font-size:8px;opacity:.5">${i+1}</span> ${w}</span>`).join('')}</div>
-    <div class="fr fr-end g6 mt8">
-      ${geminiEnabled&&state.sentence?Btn('✨ Fix Grammar','window._app.fixGrammar()','ghost','sm'):''}
-      ${Btn('↩ Undo','window._app.undoWord()','ghost','sm')}
-      ${Btn('✕ Clear','window._app.clearSentence()','ghost','sm')}
-    </div>
-    <div style="font-size:8px;color:var(--dm);margin-top:8px">✊ Hold fist=Speak · 🖐 Open palm=Clear · 👎 Thumbs down=Backspace · Hold 1-5 fingers=Select suggestion</div>`)}
+  return (
+    _renderCamera(state, camActive, cameraError, running, trained, inputMode, contextState) +
+    Card('Finger Curl', FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS)) +
+    _renderSentenceBuilder(state, displayText, spelling, suggestions, wordSuggestions, completion, geminiEnabled) +
+    (trained ? _renderQuickTest(gestures) : '') +
+    (log.length ? _renderLog(log) : '')
+  );
+}
 
-  ${trained?Card('Quick Test',`<div class="fr g5" style="flex-wrap:wrap">${state.gestures.slice(0,20).map(g=>Btn(g,`window._app.quickTest('${g}')`,'o','sm')).join('')}</div>`):''}
+function _renderCamera(state, camActive, cameraError, running, trained, inputMode, contextState) {
+  var cameraContent =
+    '<div class="vid-wrap" style="min-height:260px">' +
+      '<div id="vidContainer" style="width:100%;height:100%"></div>' +
+      '<div class="vid-badges">' +
+        '<span class="bg bg-g" id="fpsB">-- FPS</span>' +
+        '<span class="bg bg-d" id="handB">No Hand</span>' +
+      '</div>' +
+      '<div class="vid-gesture" id="gestDisp" style="display:none">' +
+        '<div class="gesture-name" id="gestName"></div>' +
+        '<div class="gesture-conf" id="gestConf"></div>' +
+      '</div>' +
+      (!camActive ? '<div class="vid-overlay"><div style="font-size:36px">📷</div><div style="font-size:10px;letter-spacing:.12em">START CAMERA</div></div>' : '') +
+    '</div>' +
 
-  ${log.length?Card('Recognition Log',`<div style="max-height:180px;overflow-y:auto">${log.slice(0,15).map((e,i)=>LogEntry(e,1-i*.05)).join('')}</div>`):''}`;
+    // system gesture progress bar
+    '<div style="height:3px;background:var(--s2);position:relative;margin-bottom:10px">' +
+      '<div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div>' +
+    '</div>' +
+
+    '<div class="fr fr-center mb8" style="gap:6px;flex-wrap:wrap">' +
+      (camActive
+        ? Btn('■ Stop Camera', 'window._app.stopCamera()', 'r', 'sm')
+        : Btn(cameraError ? '⚠ Retry Camera' : '📷 Start Camera', 'window._app.startCamera()', 'o', 'sm')) +
+      (camActive ? Btn('⇄ Flip', 'window._app.switchCamera()', 'o', 'sm') : '') +
+      (!running
+        ? Btn('▶ Recognize', 'window._app.startRecognition()', camActive ? 'g' : 'o', '', !trained)
+        : Btn('■ Stop', 'window._app.stopRecognition()', 'r')) +
+      '<select onchange="window._app.setInputMode(this.value)" style="background:var(--s2);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:6px 9px;font-family:inherit;font-size:10px;font-weight:600">' +
+        '<option value="camera"' + (inputMode === 'camera' ? ' selected' : '') + '>📷 Camera</option>' +
+        '<option value="glove"'  + (inputMode === 'glove'  ? ' selected' : '') + '>🧤 Glove</option>' +
+        '<option value="both"'   + (inputMode === 'both'   ? ' selected' : '') + '>⚡ Both</option>' +
+      '</select>' +
+    '</div>' +
+    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:6px 10px;background:var(--rD);border-radius:6px;border:1px solid var(--r)">⚠ ' + cameraError + '</div>' : '');
+
+  var statusBadges = (running || camActive ? DotBadge('Active', 'g', running || camActive) : DotBadge('Idle', 'dm', false)) +
+    (contextState !== 'IDLE' ? ' ' + Badge(contextState, 'p') : '');
+
+  return Card(
+    '<span>Live Recognition</span><span class="flex"></span>' + statusBadges,
+    cameraContent,
+    'position:relative;overflow:hidden'
+  );
+}
+
+function _renderSentenceBuilder(state, displayText, spelling, suggestions, wordSuggestions, completion, geminiEnabled) {
+  var titleRight = (geminiEnabled ? Badge('Gemini AI', 'a') : Badge('Local', 'd')) +
+    ' ' + Btn('🔊', 'window._app.speakSentence()', 'o', 'sm', !state.sentence);
+
+  var body =
+    '<div class="sent-box' + (displayText ? '' : ' empty') + '">' +
+      (displayText || 'Signs appear here…') +
+      '<span class="cursor"></span>' +
+    '</div>' +
+
+    (spelling ? '<div style="font-size:10px;color:var(--p);margin-bottom:6px">SPELLING: <strong>' + spelling.toUpperCase() + '_</strong></div>' : '') +
+
+    (wordSuggestions.length
+      ? '<div class="mb8">' +
+          '<div style="font-size:9px;color:var(--a);letter-spacing:.1em;margin-bottom:4px">WORD MATCHES</div>' +
+          '<div class="suggs">' +
+            wordSuggestions.map(function(w, i) {
+              return '<span class="sugg ai" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
+                '<span style="font-size:8px;opacity:.5">' + (i + 1) + '</span> ' + w +
+              '</span>';
+            }).join('') +
+          '</div>' +
+        '</div>'
+      : '') +
+
+    (completion && completion !== state.sentence
+      ? '<div class="completion" onclick="window._app.acceptCompletion()">' +
+          '<div class="completion-label">✨ Gemini suggests</div>' +
+          '<div class="completion-text">"' + completion + '"</div>' +
+        '</div>'
+      : '') +
+
+    '<div style="font-size:9px;color:var(--mx);letter-spacing:.1em;margin-bottom:6px">' +
+      (geminiEnabled ? 'AI' : 'LOCAL') + ' NEXT WORD' +
+    '</div>' +
+    '<div class="suggs">' +
+      suggestions.map(function(w, i) {
+        return '<span class="sugg' + (geminiEnabled ? ' ai' : '') + '" onclick="window._app.addSuggestionWord(\'' + w + '\')">' +
+          '<span style="font-size:8px;opacity:.5">' + (i + 1) + '</span> ' + w +
+        '</span>';
+      }).join('') +
+    '</div>' +
+
+    '<div class="fr fr-end g6 mt8">' +
+      (geminiEnabled && state.sentence ? Btn('✨ Fix Grammar', 'window._app.fixGrammar()', 'ghost', 'sm') : '') +
+      Btn('↩ Undo', 'window._app.undoWord()', 'ghost', 'sm') +
+      Btn('✕ Clear', 'window._app.clearSentence()', 'ghost', 'sm') +
+    '</div>' +
+
+    '<div style="font-size:8px;color:var(--dm);margin-top:8px">' +
+      '✊ Hold fist = Speak · 🖐 Open palm = Clear · 👎 Thumbs down = Backspace · Hold 1–5 fingers = Select suggestion' +
+    '</div>';
+
+  return Card(
+    '<span>Sentence Builder</span><span class="flex"></span>' + titleRight,
+    body
+  );
+}
+
+function _renderQuickTest(gestures) {
+  return Card(
+    'Quick Test',
+    '<div class="fr g5" style="flex-wrap:wrap">' +
+      gestures.slice(0, 20).map(function(g) {
+        return Btn(g, 'window._app.quickTest(\'' + g + '\')', 'o', 'sm');
+      }).join('') +
+    '</div>'
+  );
+}
+
+function _renderLog(log) {
+  return Card(
+    'Recognition Log',
+    '<div style="max-height:180px;overflow-y:auto">' +
+      log.slice(0, 15).map(function(entry, i) {
+        return LogEntry(entry, 1 - i * 0.05);
+      }).join('') +
+    '</div>'
+  );
 }
 
 
 // ═══ views/TrainView.js ═══
-// views/TrainView.js — Gesture Detection v1.0 — v6.1 Phase 2
-// Two-hand support, NLP personalisation stats, mirror augmentation badge
+// views/TrainView.js
 // No optional-chaining (?.), no nullish-coalescing (??) — Safari 12 safe.
 
-var ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-var NUMS  = '0123456789'.split('');
-var DYN_LETTERS = {J:1, Z:1};
+var ALPHA       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+var NUMS        = '0123456789'.split('');
+var DYN_LETTERS = {J: 1, Z: 1};
+
+// ── Tiny helpers ──────────────────────────────────────────────────────────────
 
 function _get(obj, key, fallback) {
   return (obj && obj[key] !== undefined && obj[key] !== null) ? obj[key] : fallback;
@@ -1885,62 +2058,33 @@ function pBar(val, max, color) {
 }
 
 function esc(s) {
-  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-function _renderSourceSelector(src) {
-  var camActive   = src === 'camera';
-  var gloveActive = src === 'glove';
-  var camStyle    = 'flex:1;padding:7px 0;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' +
-    (camActive ? 'var(--g)' : 'var(--brd)') + ';background:' + (camActive ? 'var(--gD)' : 'var(--s1)') + ';color:' + (camActive ? 'var(--g)' : 'var(--mx)');
-  var gloveStyle  = 'flex:1;padding:7px 0;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' +
-    (gloveActive ? 'var(--p)' : 'var(--brd)') + ';background:' + (gloveActive ? 'var(--pD)' : 'var(--s1)') + ';color:' + (gloveActive ? 'var(--p)' : 'var(--mx)');
-  return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">📡 Data Source</div>' +
-    '<div style="display:flex;gap:8px">' +
-      '<button style="' + camStyle + '" onclick="window._app.setTrainSource(\'camera\')">📷 Camera</button>' +
-      '<button style="' + gloveStyle + '" onclick="window._app.setTrainSource(\'glove\')">🧤 Glove / MQTT</button>' +
-    '</div>' +
-    '<div style="font-size:9px;color:var(--dm);margin-top:6px">' +
-      (camActive ? 'Recording from webcam landmarks' : 'Recording from sensor glove via MQTT') +
-    '</div>' +
-  '</div>';
-}
+// ── Main export ───────────────────────────────────────────────────────────────
 
 function renderTrainTab(state) {
-  var trainStats  = state.trainStats || {};
+  var trainStats  = state.trainStats  || {};
   var meta        = window._trainMeta    || {};
   var readiness   = window._readiness   || {};
   var histStats   = window._histStats   || {};
   var confThresh  = (window._confThresh !== undefined && window._confThresh !== null) ? window._confThresh : 0.65;
-  var perGestAcc  = window._perGestAcc  || {static:{}, dynamic:{}};
+  var perGestAcc  = window._perGestAcc  || {static: {}, dynamic: {}};
   var section     = window._trainSection || 'alphabet';
   var guided      = window._guidedGesture || null;
   var liveP       = window._livePrediction || null;
   var countdown   = window._countdown   || 0;
   var customs     = window._customGestures || [];
-  var nlpStats    = window._nlpStats     || {};
+  var nlpStats    = window._nlpStats    || {};
   var trainSource = window._trainSource  || 'camera';
 
-  var nlpCorpus   = (nlpStats.corpus_size !== undefined) ? nlpStats.corpus_size : 0;
-  var nlpPersonal = nlpStats.personal_model_active ? true : false;
-
-  var isTraining  = _get(trainStats, 'isTraining', false);
-  var progress    = _get(trainStats, 'progress', 0);
-  var sAcc        = _get(trainStats, 'staticAccuracy',  0);
-  var sLoss       = _get(trainStats, 'staticLoss',      1);
-  var sEp         = _get(trainStats, 'staticEpochs',    0);
-  var sTrained    = _get(trainStats, 'staticTrained',   false);
-  var dAcc        = _get(trainStats, 'dynamicAccuracy', 0);
-  var dLoss       = _get(trainStats, 'dynamicLoss',     1);
-  var dEp         = _get(trainStats, 'dynamicEpochs',   0);
-  var dTrained    = _get(trainStats, 'dynamicTrained',  false);
+  var isTraining = _get(trainStats, 'isTraining', false);
+  var progress   = _get(trainStats, 'progress',   0);
+  var sTrained   = _get(trainStats, 'staticTrained',  false);
+  var dTrained   = _get(trainStats, 'dynamicTrained', false);
 
   var needsRetrain = _get(histStats, 'needsRetrain', false) && (sTrained || dTrained);
   var newSince     = _get(histStats, 'newSamplesSinceLastTrain', 0);
-  var totalCaptures= _get(histStats, 'totalCaptures', 0);
-  var totalTrains  = _get(histStats, 'totalTrains', 0);
-  var lastTrain    = _get(histStats, 'lastTrainAt', null);
 
   var readyCount = 0;
   var totalCount = 0;
@@ -1950,47 +2094,91 @@ function renderTrainTab(state) {
     if (readiness[k] && readiness[k].ready) readyCount++;
   }
 
-  var livePredHTML = '';
-  if (liveP && liveP.name && liveP.name !== 'Unknown') {
-    livePredHTML = '<div class="live-pred-box">' +
-      '<div style="font-size:8px;color:var(--mx);letter-spacing:.08em;margin-bottom:2px">LIVE PREDICTION</div>' +
-      '<div style="display:flex;align-items:center;gap:6px">' +
-        '<span style="font-size:18px;font-weight:800;color:var(--g)">' + liveP.name + '</span>' +
-        '<span style="font-size:10px;color:var(--mx)">' + Math.round(liveP.conf * 100) + '%</span>' +
-        '<span style="font-size:8px;color:var(--dm)">[' + (liveP.model || '') + ']</span>' +
-      '</div></div>';
-  } else {
-    livePredHTML = '<div style="font-size:8px;color:var(--dm);margin-top:4px">' +
-      (state.camActive ? '✓ Camera active' : '⏳ Waiting…') +
-      ((sTrained || dTrained) ? ' · live prediction ON' : ' · train model to enable') +
+  var html = _renderCameraStrip(state, liveP, countdown);
+
+  html += '<div id="trainStatus" style="display:none;padding:8px 14px;border-radius:8px;margin-bottom:10px;font-size:11px;font-weight:600;text-align:center"></div>';
+
+  if (needsRetrain) {
+    html += _renderRetrainAlert(newSince);
+  }
+
+  html += _renderModelStats(trainStats);
+
+  if (isTraining) {
+    html += _renderTrainingProgress(progress);
+  }
+
+  html += _renderControls(isTraining, confThresh, readyCount, totalCount);
+  html += _renderSourceSelector(trainSource);
+  html += _renderSectionTabs(section);
+
+  if (section === 'alphabet')  html += _renderAlpha(meta, readiness, guided);
+  else if (section === 'numbers') html += _renderNums(meta, readiness);
+  else if (section === 'words')   html += _renderWords(meta, readiness, state.gestures, customs);
+  else                             html += _renderCustom(meta, readiness, customs);
+
+  html += _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained);
+  html += _renderSessionHistory(histStats);
+  html += _renderNlpCard(nlpStats);
+
+  return html;
+}
+
+// ── Section renderers ─────────────────────────────────────────────────────────
+
+function _renderCameraStrip(state, liveP, countdown) {
+  var fingerBars = '';
+  for (var fi = 0; fi < APP_CONFIG.FINGER_NAMES.length; fi++) {
+    fingerBars +=
+      '<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">' +
+        '<span style="font-size:8px;width:36px;color:' + APP_CONFIG.FINGER_COLORS[fi] + ';font-weight:600">' + APP_CONFIG.FINGER_NAMES[fi] + '</span>' +
+        '<div class="bar-wrap"><div class="bar-fill" id="trainFb' + fi + '" style="width:0%;background:' + APP_CONFIG.FINGER_COLORS[fi] + '"></div></div>' +
+        '<span style="font-size:8px;width:26px;text-align:right" id="trainFv' + fi + '">0%</span>' +
       '</div>';
   }
 
-  var fingerBars = '';
-  for (var fi = 0; fi < APP_CONFIG.FINGER_NAMES.length; fi++) {
-    fingerBars += '<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">' +
-      '<span style="font-size:8px;width:36px;color:' + APP_CONFIG.FINGER_COLORS[fi] + ';font-weight:600">' + APP_CONFIG.FINGER_NAMES[fi] + '</span>' +
-      '<div class="bar-wrap"><div class="bar-fill" id="trainFb' + fi + '" style="width:0%;background:' + APP_CONFIG.FINGER_COLORS[fi] + '"></div></div>' +
-      '<span style="font-size:8px;width:26px;text-align:right" id="trainFv' + fi + '">0%</span>' +
-    '</div>';
+  var livePredHTML;
+  if (liveP && liveP.name && liveP.name !== 'Unknown') {
+    livePredHTML =
+      '<div class="live-pred-box">' +
+        '<div style="font-size:8px;color:var(--mx);letter-spacing:.08em;margin-bottom:2px">LIVE PREDICTION</div>' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          '<span style="font-size:18px;font-weight:800;color:var(--g)">' + liveP.name + '</span>' +
+          '<span style="font-size:10px;color:var(--mx)">' + Math.round(liveP.conf * 100) + '%</span>' +
+          '<span style="font-size:8px;color:var(--dm)">[' + (liveP.model || '') + ']</span>' +
+        '</div>' +
+      '</div>';
+  } else {
+    livePredHTML =
+      '<div style="font-size:8px;color:var(--dm);margin-top:4px">' +
+        (state.camActive ? '✓ Camera active' : '⏳ Waiting…') +
+        ((state.staticTrained || state.dynamicTrained) ? ' · live prediction ON' : ' · train model to enable') +
+      '</div>';
   }
 
-  // Sticky camera strip
-  var html = '<div style="position:sticky;top:0;z-index:50;padding-bottom:8px;background:var(--bg)">' +
-    '<div class="cd" style="margin-bottom:0;' + (state.recording ? 'border-color:var(--r);box-shadow:0 0 18px rgba(251,113,133,.15)' : '') + '">' +
+  var recBorder = state.recording ? 'border-color:var(--r);box-shadow:0 0 18px rgba(251,113,133,.15)' : '';
+
+  return '<div style="position:sticky;top:0;z-index:50;padding-bottom:8px;background:var(--bg)">' +
+    '<div class="cd" style="margin-bottom:0;' + recBorder + '">' +
       '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">' +
-        // Camera box
+
         '<div style="position:relative;width:180px;min-height:130px;border-radius:8px;overflow:hidden;background:var(--s1);border:1px solid ' + (state.recording ? 'var(--r)' : 'var(--brd)') + ';flex-shrink:0">' +
           '<div id="trainVidContainer" style="width:100%;height:100%;min-height:130px"></div>' +
-          (!state.camActive ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:22px">📷</div><div style="font-size:8px">Loading…</div></div>' : '') +
-          (state.recording ? '<div style="position:absolute;top:5px;right:5px"><span class="bg bg-r" style="font-size:8px"><span class="dot dot-r dot-pulse"></span>REC</span></div>' : '') +
-          (countdown > 0 ? '<div class="countdown-overlay"><div class="countdown-num">' + countdown + '</div></div>' : '') +
+          (!state.camActive
+            ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:22px">📷</div><div style="font-size:8px">Loading…</div></div>'
+            : '') +
+          (state.recording
+            ? '<div style="position:absolute;top:5px;right:5px"><span class="bg bg-r" style="font-size:8px"><span class="dot dot-r dot-pulse"></span>REC</span></div>'
+            : '') +
+          (countdown > 0
+            ? '<div class="countdown-overlay"><div class="countdown-num">' + countdown + '</div></div>'
+            : '') +
           '<div style="position:absolute;bottom:0;left:0;right:0;display:flex;gap:3px;padding:3px">' +
             '<span id="trainFpsB" style="font-size:7px;background:rgba(0,0,0,.7);color:var(--g);padding:2px 5px;border-radius:4px;font-weight:700">-- FPS</span>' +
             '<span id="trainHandB" style="font-size:7px;background:rgba(0,0,0,.7);color:var(--mx);padding:2px 5px;border-radius:4px;font-weight:700">No Hand</span>' +
           '</div>' +
         '</div>' +
-        // Finger bars + live prediction
+
         '<div style="flex:1;min-width:160px">' +
           '<div style="font-size:8px;color:var(--mx);letter-spacing:.1em;margin-bottom:4px">LIVE FINGER CURL</div>' +
           fingerBars +
@@ -1999,21 +2187,27 @@ function renderTrainTab(state) {
       '</div>' +
     '</div>' +
   '</div>';
+}
 
-  // Status bar
-  html += '<div id="trainStatus" style="display:none;padding:8px 14px;border-radius:8px;margin-bottom:10px;font-size:11px;font-weight:600;text-align:center"></div>';
+function _renderRetrainAlert(newSince) {
+  return '<div style="padding:10px 14px;background:var(--aD);border:1px solid var(--a);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:10px;flex-wrap:wrap">' +
+    '<span style="font-size:16px">⚠️</span>' +
+    '<div style="flex:1"><strong style="color:var(--a)">' + newSince + ' new samples</strong> since last training — model is outdated.</div>' +
+    Btn('Retrain Now', 'window._app.trainModel()', 'a', 'sm') +
+  '</div>';
+}
 
-  // Retrain alert
-  if (needsRetrain) {
-    html += '<div style="padding:10px 14px;background:var(--aD);border:1px solid var(--a);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:10px;flex-wrap:wrap">' +
-      '<span style="font-size:16px">⚠️</span>' +
-      '<div style="flex:1"><strong style="color:var(--a)">' + newSince + ' new samples</strong> since last training — model is outdated.</div>' +
-      Btn('Retrain Now', 'window._app.trainModel()', 'a', 'sm') +
-    '</div>';
-  }
+function _renderModelStats(trainStats) {
+  var sAcc     = _get(trainStats, 'staticAccuracy',  0);
+  var sLoss    = _get(trainStats, 'staticLoss',      1);
+  var sEp      = _get(trainStats, 'staticEpochs',    0);
+  var sTrained = _get(trainStats, 'staticTrained',   false);
+  var dAcc     = _get(trainStats, 'dynamicAccuracy', 0);
+  var dLoss    = _get(trainStats, 'dynamicLoss',     1);
+  var dEp      = _get(trainStats, 'dynamicEpochs',   0);
+  var dTrained = _get(trainStats, 'dynamicTrained',  false);
 
-  // Model stats side by side
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
     '<div class="cd" style="margin-bottom:0">' +
       '<div class="cd-label">🧠 Static MLP ' + (sTrained ? '<span class="bg bg-g" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
@@ -2031,24 +2225,26 @@ function renderTrainTab(state) {
       '</div>' +
     '</div>' +
   '</div>';
+}
 
-  // Training progress bar
-  if (isTraining) {
-    html += '<div class="cd" style="margin-bottom:12px">' +
-      '<div class="cd-label">⚡ Training… ' + Math.round(progress) + '%</div>' +
-      Bar(progress) +
-    '</div>';
-  }
+function _renderTrainingProgress(progress) {
+  return '<div class="cd" style="margin-bottom:12px">' +
+    '<div class="cd-label">⚡ Training… ' + Math.round(progress) + '%</div>' +
+    Bar(progress) +
+  '</div>';
+}
 
-  // Controls card
-  html += '<div class="cd" style="margin-bottom:12px">' +
+function _renderControls(isTraining, confThresh, readyCount, totalCount) {
+  return '<div class="cd" style="margin-bottom:12px">' +
     '<div class="cd-label">⚙ Controls</div>' +
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' +
-      Btn('📦 Demo Data', 'window._app.generateDemoData()', 'a', 'sm') +
+      Btn('📦 Demo Data',   'window._app.generateDemoData()', 'a', 'sm') +
       Btn(isTraining ? '⏳ Training…' : '🚀 Train Models', 'window._app.trainModel()', 'g', '', isTraining) +
       Btn('🗑 Delete Model', 'window._app.deleteModel()', 'r', 'sm', isTraining) +
-      Btn('📤 Export', 'window._app.exportDataset()', 'o', 'sm') +
-      '<label class="btn btn-o btn-sm" style="cursor:pointer">📥 Import<input type="file" accept=".json" style="display:none" onchange="window._app.importDataset(this.files[0])"></label>' +
+      Btn('📤 Export',       'window._app.exportDataset()', 'o', 'sm') +
+      '<label class="btn btn-o btn-sm" style="cursor:pointer">📥 Import' +
+        '<input type="file" accept=".json" style="display:none" onchange="window._app.importDataset(this.files[0])">' +
+      '</label>' +
     '</div>' +
     '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
       '<span style="font-size:9px;color:var(--mx);white-space:nowrap">CONFIDENCE</span>' +
@@ -2059,71 +2255,104 @@ function renderTrainTab(state) {
     '</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-top:6px">' + readyCount + '/' + totalCount + ' gestures ready · samples in SQLite DB</div>' +
   '</div>';
+}
 
+function _renderSourceSelector(src) {
+  var camActive   = src === 'camera';
+  var gloveActive = src === 'glove';
+  var camStyle    = 'flex:1;padding:7px 0;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' +
+    (camActive ? 'var(--g)' : 'var(--brd)') + ';background:' + (camActive ? 'var(--gD)' : 'var(--s1)') + ';color:' + (camActive ? 'var(--g)' : 'var(--mx)');
+  var gloveStyle  = 'flex:1;padding:7px 0;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' +
+    (gloveActive ? 'var(--p)' : 'var(--brd)') + ';background:' + (gloveActive ? 'var(--pD)' : 'var(--s1)') + ';color:' + (gloveActive ? 'var(--p)' : 'var(--mx)');
 
-  // Source selector card — uses helper function to avoid quote escaping
-  html += _renderSourceSelector(trainSource);
+  return '<div class="cd" style="margin-bottom:12px">' +
+    '<div class="cd-label">📡 Data Source</div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button style="' + camStyle   + '" onclick="window._app.setTrainSource(\'camera\')">📷 Camera</button>' +
+      '<button style="' + gloveStyle + '" onclick="window._app.setTrainSource(\'glove\')">🧤 Glove / MQTT</button>' +
+    '</div>' +
+    '<div style="font-size:9px;color:var(--dm);margin-top:6px">' +
+      (camActive ? 'Recording from webcam landmarks' : 'Recording from sensor glove via MQTT') +
+    '</div>' +
+  '</div>';
+}
 
-  // Section tabs  '</div>';
-
-  // Section tabs
-  var tabs = ['alphabet','numbers','words','custom'];
-  var tabLabels = {alphabet:'🔤 A–Z', numbers:'🔢 0–9', words:'💬 Words', custom:'✏️ Custom'};
-  html += '<div class="section-tabs">';
+function _renderSectionTabs(section) {
+  var tabs      = ['alphabet', 'numbers', 'words', 'custom'];
+  var tabLabels = {alphabet: '🔤 A–Z', numbers: '🔢 0–9', words: '💬 Words', custom: '✏️ Custom'};
+  var html = '<div class="section-tabs">';
   for (var ti = 0; ti < tabs.length; ti++) {
     var s = tabs[ti];
     html += '<button class="tab' + (section === s ? ' active' : '') + '" onclick="window._app.setTrainSection(\'' + s + '\')">' + tabLabels[s] + '</button>';
   }
-  html += '</div>';
+  return html + '</div>';
+}
 
-  // Section content
-  if (section === 'alphabet') html += _renderAlpha(meta, readiness, guided);
-  else if (section === 'numbers') html += _renderNums(meta, readiness);
-  else if (section === 'words') html += _renderWords(meta, readiness, state.gestures, customs);
-  else html += _renderCustom(meta, readiness, customs);
-
-  // Per-gesture accuracy
+function _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained) {
   var allAcc = {};
   var pg;
-  if (perGestAcc.static) { for (pg in perGestAcc.static) allAcc[pg] = perGestAcc.static[pg]; }
+  if (perGestAcc.static)  { for (pg in perGestAcc.static)  allAcc[pg] = perGestAcc.static[pg]; }
   if (perGestAcc.dynamic) { for (pg in perGestAcc.dynamic) allAcc[pg] = perGestAcc.dynamic[pg]; }
+
   var accKeys = Object.keys(allAcc);
-  if ((sTrained || dTrained) && accKeys.length > 0) {
-    accKeys.sort(function(a,b){ return allAcc[a] - allAcc[b]; });
-    html += '<div class="cd" style="margin-bottom:12px">' +
-      '<div class="cd-label">📊 Per-Gesture Accuracy</div>' +
-      '<div style="font-size:9px;color:var(--dm);margin-bottom:8px">Below 70% = needs more samples</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:5px">';
-    for (var ai = 0; ai < accKeys.length; ai++) {
-      var gn = accKeys[ai]; var ga = allAcc[gn];
-      var gc = ga < 0.7 ? 'var(--r)' : ga < 0.85 ? 'var(--a)' : 'var(--g)';
-      html += '<div style="padding:6px 8px;background:var(--s1);border-radius:6px;border:1px solid ' + gc + '40">' +
-        '<div style="display:flex;justify-content:space-between;margin-bottom:3px">' +
-          '<span style="font-size:10px;font-weight:700">' + gn + '</span>' +
-          '<span style="font-size:9px;font-weight:700;color:' + gc + '">' + Math.round(ga * 100) + '%</span>' +
-        '</div>' +
-        pBar(Math.round(ga * 100), 100, gc) +
-      '</div>';
-    }
-    html += '</div></div>';
+  if (!(sTrained || dTrained) || accKeys.length === 0) return '';
+
+  accKeys.sort(function(a, b) { return allAcc[a] - allAcc[b]; });
+
+  var rows = '';
+  for (var ai = 0; ai < accKeys.length; ai++) {
+    var gn = accKeys[ai];
+    var ga = allAcc[gn];
+    var gc = ga < 0.7 ? 'var(--r)' : ga < 0.85 ? 'var(--a)' : 'var(--g)';
+    rows += '<div style="padding:6px 8px;background:var(--s1);border-radius:6px;border:1px solid ' + gc + '40">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">' +
+        '<span style="font-size:10px;font-weight:700">' + gn + '</span>' +
+        '<span style="font-size:9px;font-weight:700;color:' + gc + '">' + Math.round(ga * 100) + '%</span>' +
+      '</div>' +
+      pBar(Math.round(ga * 100), 100, gc) +
+    '</div>';
   }
 
-  // Session history
-  html += '<div class="cd" style="margin-bottom:12px">' +
+  return '<div class="cd" style="margin-bottom:12px">' +
+    '<div class="cd-label">📊 Per-Gesture Accuracy</div>' +
+    '<div style="font-size:9px;color:var(--dm);margin-bottom:8px">Below 70% = needs more samples</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:5px">' +
+      rows +
+    '</div>' +
+  '</div>';
+}
+
+function _renderSessionHistory(histStats) {
+  var totalCaptures = _get(histStats, 'totalCaptures', 0);
+  var totalTrains   = _get(histStats, 'totalTrains',   0);
+  var newSince      = _get(histStats, 'newSamplesSinceLastTrain', 0);
+  var lastTrain     = _get(histStats, 'lastTrainAt',   null);
+
+  return '<div class="cd" style="margin-bottom:12px">' +
     '<div class="cd-label">🕐 Session History</div>' +
     '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">' +
-      '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--g)">' + totalCaptures + '</div><div style="font-size:8px;color:var(--mx)">Captures</div></div>' +
-      '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--p)">' + totalTrains + '</div><div style="font-size:8px;color:var(--mx)">Trains</div></div>' +
-      '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--a)">' + newSince + '</div><div style="font-size:8px;color:var(--mx)">New Since</div></div>' +
-      (lastTrain ? '<div style="text-align:center"><div style="font-size:10px;font-weight:600;color:var(--tx)">' + new Date(lastTrain).toLocaleDateString() + '</div><div style="font-size:8px;color:var(--mx)">Last Trained</div></div>' : '') +
+      '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--g)">'  + totalCaptures + '</div><div style="font-size:8px;color:var(--mx)">Captures</div></div>' +
+      '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--p)">'  + totalTrains   + '</div><div style="font-size:8px;color:var(--mx)">Trains</div></div>' +
+      '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--a)">'  + newSince      + '</div><div style="font-size:8px;color:var(--mx)">New Since</div></div>' +
+      (lastTrain
+        ? '<div style="text-align:center"><div style="font-size:10px;font-weight:600;color:var(--tx)">' + new Date(lastTrain).toLocaleDateString() + '</div><div style="font-size:8px;color:var(--mx)">Last Trained</div></div>'
+        : '') +
     '</div>' +
     Btn('View History', 'window._app.loadSessionHistory()', 'o', 'sm') +
     '<div id="historyPanel" style="display:none;margin-top:10px;max-height:200px;overflow-y:auto"></div>' +
   '</div>';
+}
 
-  // Phase 2B: NLP Personalisation card
-  html += '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🧠 Adaptive NLP ' + (nlpPersonal ? '<span class="bg bg-g" style="font-size:8px">Personal Model Active</span>' : '<span class="bg bg-d" style="font-size:8px">Building…</span>') + '</div>' +
+function _renderNlpCard(nlpStats) {
+  var nlpCorpus   = (nlpStats.corpus_size !== undefined) ? nlpStats.corpus_size : 0;
+  var nlpPersonal = nlpStats.personal_model_active ? true : false;
+
+  return '<div class="cd" style="margin-bottom:12px">' +
+    '<div class="cd-label">🧠 Adaptive NLP ' +
+      (nlpPersonal
+        ? '<span class="bg bg-g" style="font-size:8px">Personal Model Active</span>'
+        : '<span class="bg bg-d" style="font-size:8px">Building…</span>') +
+    '</div>' +
     '<div style="font-size:9px;color:var(--mx);margin-bottom:8px">NLP learns from your signing history and personalises word suggestions over time.</div>' +
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px">' +
       '<div style="text-align:center;padding:8px;background:var(--s1);border-radius:8px">' +
@@ -2141,10 +2370,9 @@ function renderTrainTab(state) {
     '</div>' +
     '<div style="font-size:9px;color:var(--dm)">Speak sentences using the Recognize tab to train the personal model. Retrains automatically every 3 new sentences.</div>' +
   '</div>';
-
-  return html;
 }
 
+// ── Gesture grid renderers ────────────────────────────────────────────────────
 
 function _renderAlpha(meta, readiness, guided) {
   var html = '<div class="cd" style="margin-bottom:12px">' +
@@ -2155,11 +2383,9 @@ function _renderAlpha(meta, readiness, guided) {
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:5px">';
   for (var i = 0; i < ALPHA.length; i++) {
     var lt = ALPHA[i];
-    var isDyn = DYN_LETTERS[lt] ? true : false;
-    html += _card(lt, meta, readiness, isDyn ? 'dynamic' : 'static', guided === lt);
+    html += _card(lt, meta, readiness, DYN_LETTERS[lt] ? 'dynamic' : 'static', guided === lt);
   }
-  html += '</div></div>';
-  return html;
+  return html + '</div></div>';
 }
 
 function _renderNums(meta, readiness) {
@@ -2170,25 +2396,24 @@ function _renderNums(meta, readiness) {
   for (var i = 0; i < NUMS.length; i++) {
     html += _card(NUMS[i], meta, readiness, 'static', false);
   }
-  html += '</div></div>';
-  return html;
+  return html + '</div></div>';
 }
 
 function _renderWords(meta, readiness, gestures, customs) {
-  var words = [];
-  var alphaSet = {};
-  var numSet = {};
+  var alphaSet  = {};
+  var numSet    = {};
   var customSet = {};
+  var words     = [];
   var i;
-  for (i = 0; i < ALPHA.length; i++) alphaSet[ALPHA[i]] = 1;
-  for (i = 0; i < NUMS.length;  i++) numSet[NUMS[i]] = 1;
+  for (i = 0; i < ALPHA.length;  i++) alphaSet[ALPHA[i]]    = 1;
+  for (i = 0; i < NUMS.length;   i++) numSet[NUMS[i]]        = 1;
   for (i = 0; i < customs.length; i++) customSet[customs[i]] = 1;
   for (i = 0; i < gestures.length; i++) {
     var g = gestures[i];
     if (!alphaSet[g] && !numSet[g] && !customSet[g]) words.push(g);
   }
-  var html = '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">💬 Word Gestures</div>';
+
+  var html = '<div class="cd" style="margin-bottom:12px"><div class="cd-label">💬 Word Gestures</div>';
   if (words.length === 0) {
     html += '<div style="font-size:10px;color:var(--dm);padding:10px 0">No word gestures. Generate demo data to add some.</div>';
   } else {
@@ -2196,8 +2421,7 @@ function _renderWords(meta, readiness, gestures, customs) {
     for (i = 0; i < words.length; i++) html += _wideCard(words[i], meta, readiness, false);
     html += '</div>';
   }
-  html += '</div>';
-  return html;
+  return html + '</div>';
 }
 
 function _renderCustom(meta, readiness, customs) {
@@ -2213,6 +2437,7 @@ function _renderCustom(meta, readiness, customs) {
       '</select>' +
       Btn('+ Add', 'window._app.addCustomGesture(document.getElementById(\'newGInput\').value,document.getElementById(\'newGType\').value);document.getElementById(\'newGInput\').value=\'\'', 'g', 'sm') +
     '</div>';
+
   if (customs.length === 0) {
     html += '<div style="font-size:10px;color:var(--dm);text-align:center;padding:10px 0">No custom gestures yet. Add one above!</div>';
   } else {
@@ -2220,24 +2445,24 @@ function _renderCustom(meta, readiness, customs) {
     for (var i = 0; i < customs.length; i++) html += _wideCard(customs[i], meta, readiness, true);
     html += '</div>';
   }
-  html += '</div>';
-  return html;
+  return html + '</div>';
 }
 
+// ── Gesture card components ───────────────────────────────────────────────────
+
 function _card(name, meta, readiness, defaultType, isGuided) {
-  var m   = meta[name] || {static:0,dynamic:0,static_quality:0,dynamic_quality:0};
-  var r   = readiness[name] || {ready:false,needed:0,type:defaultType};
+  var m   = meta[name] || {static: 0, dynamic: 0, static_quality: 0, dynamic_quality: 0};
+  var r   = readiness[name] || {ready: false, needed: 0, type: defaultType};
   var t   = r.type || defaultType;
-  var isDyn = t === 'dynamic';
-  var src = window._trainSource || 'camera';
+  var isDyn   = t === 'dynamic';
+  var src     = window._trainSource || 'camera';
   var camKey  = isDyn ? 'dynamic_camera' : 'static_camera';
   var gloveKey= isDyn ? 'dynamic_glove'  : 'static_glove';
-  var srcCount = src === 'camera' ? (m[camKey]||0) : (m[gloveKey]||0);
-  var count = srcCount; // show only source-specific count
-  var total = isDyn ? (m.dynamic || 0) : (m.static || 0); // total across sources
-  var target= isDyn ? 5 : 10;
-  var q   = isDyn ? (m.dynamic_quality || 0) : (m.static_quality || 0);
-  var ready = r.ready;
+  var count   = src === 'camera' ? (m[camKey] || 0) : (m[gloveKey] || 0);
+  var total   = isDyn ? (m.dynamic || 0) : (m.static || 0);
+  var target  = isDyn ? 5 : 10;
+  var q       = isDyn ? (m.dynamic_quality || 0) : (m.static_quality || 0);
+  var ready   = r.ready;
 
   var bg  = isGuided ? 'var(--pD)' : ready ? 'var(--gD)' : 'var(--s1)';
   var brd = isGuided ? 'var(--p)'  : ready ? 'var(--g)'  : 'var(--brd)';
@@ -2247,24 +2472,28 @@ function _card(name, meta, readiness, defaultType, isGuided) {
     '<span class="bg ' + (isDyn ? 'bg-p' : 'bg-g') + '" style="font-size:7px">' + (isDyn ? 'DYN' : 'STA') + '</span>' +
     '<div style="display:flex;align-items:center;gap:4px;margin:4px 0">' +
       pBar(count, target, ready ? 'var(--g)' : 'var(--a)') +
-      '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + count + '/' + target + (total>count?' ('+total+' tot)':'') + '</span>' +
+      '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + count + '/' + target + (total > count ? ' (' + total + ' tot)' : '') + '</span>' +
     '</div>' +
-    (count > 0 ? '<div style="font-size:7px;color:' + qColor(q) + ';margin-bottom:4px">' + qLabel(q) + '</div>' : '<div style="height:14px"></div>') +
+    (count > 0
+      ? '<div style="font-size:7px;color:' + qColor(q) + ';margin-bottom:4px">' + qLabel(q) + '</div>'
+      : '<div style="height:14px"></div>') +
     '<div style="display:flex;gap:3px;justify-content:center">' +
       (isDyn
         ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">🎬</button>'
         : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">📸</button>') +
-      (count > 0 ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">🗑</button>' : '') +
+      (count > 0
+        ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">🗑</button>'
+        : '') +
     '</div>' +
   '</div>';
 }
 
 function _wideCard(name, meta, readiness, isCustom) {
-  var m   = meta[name] || {static:0,dynamic:0,static_quality:0,dynamic_quality:0};
-  var r   = readiness[name] || {ready:false,needed:0,type:'static'};
+  var m     = meta[name] || {static: 0, dynamic: 0, static_quality: 0, dynamic_quality: 0};
+  var r     = readiness[name] || {ready: false, needed: 0, type: 'static'};
   var isDyn = r.type === 'dynamic';
-  var sc  = m.static  || 0;
-  var dc  = m.dynamic || 0;
+  var sc    = m.static  || 0;
+  var dc    = m.dynamic || 0;
   var ready = r.ready;
   var needed= r.needed || 0;
 
@@ -2274,7 +2503,9 @@ function _wideCard(name, meta, readiness, isCustom) {
         '<span style="font-size:13px;font-weight:700">' + name + '</span> ' +
         '<span class="bg ' + (isDyn ? 'bg-p' : 'bg-g') + '" style="font-size:7px">' + (isDyn ? 'DYN' : 'STA') + '</span>' +
       '</div>' +
-      (isCustom ? '<button style="padding:3px 7px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:5px;cursor:pointer" onclick="window._app.deleteGesture(\'' + esc(name) + '\')">✕</button>' : '') +
+      (isCustom
+        ? '<button style="padding:3px 7px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:5px;cursor:pointer" onclick="window._app.deleteGesture(\'' + esc(name) + '\')">✕</button>'
+        : '') +
     '</div>' +
     '<div style="font-size:8px;color:var(--mx);margin-bottom:5px">📸 ' + sc + ' static · 🎬 ' + dc + ' dynamic</div>' +
     '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px">' +
@@ -2284,7 +2515,9 @@ function _wideCard(name, meta, readiness, isCustom) {
     '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
       '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">📸 Static</button>' +
       '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">🎬 Dynamic</button>' +
-      (sc + dc > 0 ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">🗑</button>' : '') +
+      (sc + dc > 0
+        ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">🗑</button>'
+        : '') +
     '</div>' +
   '</div>';
 }
@@ -2292,216 +2525,368 @@ function _wideCard(name, meta, readiness, isCustom) {
 
 // ═══ views/SequenceView.js ═══
 // views/SequenceView.js
-function renderSequenceTab(state){
-  const{gestures,combos}=state;const seq=window._comboSeq||[];
-  return`${Card('🔗 Gesture Combos',`<div style="font-size:12px;color:var(--mx);line-height:1.7"><strong style="color:var(--g)">Combos</strong> detect ordered gesture sequences. <strong style="color:var(--p)">Dynamic model</strong> handles motion-based recognition.</div>`)}
-  ${Card('Create Combo',`<div class="fr g5 mb8" style="flex-wrap:wrap">${gestures.slice(0,20).map(g=>`<button class="btn btn-o btn-sm" onclick="window._comboSeq=(window._comboSeq||[]);window._comboSeq.push('${g}');window._app.switchTab('sequences')">${g}</button>`).join('')}</div>
-    ${seq.length?`<div class="fr g5 mb8" style="padding:8px 12px;background:var(--pD);border-radius:8px;border:1px solid rgba(167,139,250,.2);flex-wrap:wrap"><span style="font-size:10px;color:var(--p);font-weight:700">SEQ:</span>${seq.map((g,i)=>`${Badge(g,'p')}${i<seq.length-1?'<span style="color:var(--dm)">→</span>':''}`).join('')}<button class="btn btn-ghost btn-sm" onclick="window._comboSeq=[];window._app.switchTab('sequences')">✕</button></div>`:''}
-    <div class="fr g6"><input class="inp f1" id="comboAct" placeholder="Output phrase..."><button class="btn btn-g" onclick="if((window._comboSeq||[]).length>=2&&document.getElementById('comboAct').value.trim()){window._app.addCombo(window._comboSeq,document.getElementById('comboAct').value.trim());window._comboSeq=[];document.getElementById('comboAct').value='';window._app.switchTab('sequences')}"${seq.length<2?' disabled':''}>Save</button></div>`)}
-  ${Card('Registered Combos',combos.map(c=>`<div class="fr mb8" style="padding:10px 14px;background:var(--s1);border-radius:8px;border:1px solid var(--brd)"><div class="f1"><div class="fr g5 mb8" style="flex-wrap:wrap">${c.sequence.map((g,i)=>`${Badge(g,'p')}${i<c.sequence.length-1?'<span style="color:var(--dm)">→</span>':''}`).join('')}</div><div style="font-size:12px;font-weight:600;color:var(--g)">"${c.action}"</div></div>${Badge((c.timeout/1000).toFixed(1)+'s','a')}</div>`).join(''))}`;
+function renderSequenceTab(state) {
+  var gestures = state.gestures;
+  var combos   = state.combos;
+  var seq      = window._comboSeq || [];
+
+  return (
+    _renderIntro() +
+    _renderBuilder(gestures, seq) +
+    _renderSavedCombos(combos)
+  );
+}
+
+function _renderIntro() {
+  return Card(
+    '🔗 Gesture Combos',
+    '<div style="font-size:12px;color:var(--mx);line-height:1.7">' +
+      '<strong style="color:var(--g)">Combos</strong> fire when you sign a specific sequence of gestures. ' +
+      'The <strong style="color:var(--p)">dynamic model</strong> handles motion-based gestures like J and Z.' +
+    '</div>'
+  );
+}
+
+function _renderBuilder(gestures, seq) {
+  var gestureButtons = gestures.slice(0, 20).map(function(g) {
+    return '<button class="btn btn-o btn-sm" onclick="' +
+      'window._comboSeq=(window._comboSeq||[]);window._comboSeq.push(\'' + g + '\');window._app.switchTab(\'sequences\')" >' +
+      g +
+    '</button>';
+  }).join('');
+
+  var seqPreview = seq.length
+    ? '<div class="fr g5 mb8" style="padding:8px 12px;background:var(--pD);border-radius:8px;border:1px solid rgba(155,143,212,.2);flex-wrap:wrap">' +
+        '<span style="font-size:10px;color:var(--p);font-weight:700">SEQ:</span>' +
+        seq.map(function(g, i) {
+          return Badge(g, 'p') + (i < seq.length - 1 ? '<span style="color:var(--dm)">→</span>' : '');
+        }).join('') +
+        '<button class="btn btn-ghost btn-sm" onclick="window._comboSeq=[];window._app.switchTab(\'sequences\')">✕ clear</button>' +
+      '</div>'
+    : '<div style="font-size:10px;color:var(--dm);margin-bottom:8px">Tap gestures above to build a sequence (min 2).</div>';
+
+  var saveBtn = '<button class="btn btn-g" ' +
+    'onclick="if((window._comboSeq||[]).length>=2&&document.getElementById(\'comboAct\').value.trim()){' +
+      'window._app.addCombo(window._comboSeq,document.getElementById(\'comboAct\').value.trim());' +
+      'window._comboSeq=[];document.getElementById(\'comboAct\').value=\'\';window._app.switchTab(\'sequences\')' +
+    '}" ' + (seq.length < 2 ? 'disabled' : '') + '>Save combo</button>';
+
+  return Card(
+    'Create Combo',
+    '<div class="fr g5 mb8" style="flex-wrap:wrap">' + gestureButtons + '</div>' +
+    seqPreview +
+    '<div class="fr g6">' +
+      '<input class="inp f1" id="comboAct" placeholder="Output phrase…">' +
+      saveBtn +
+    '</div>'
+  );
+}
+
+function _renderSavedCombos(combos) {
+  if (!combos || combos.length === 0) {
+    return Card('Saved Combos', '<div style="font-size:10px;color:var(--dm)">No combos yet. Build one above.</div>');
+  }
+
+  var rows = combos.map(function(c) {
+    var arrows = c.sequence.map(function(g, i) {
+      return Badge(g, 'p') + (i < c.sequence.length - 1 ? '<span style="color:var(--dm)">→</span>' : '');
+    }).join('');
+
+    return '<div class="fr mb8" style="padding:10px 14px;background:var(--s2);border-radius:8px;border:1px solid var(--brd)">' +
+      '<div class="f1">' +
+        '<div class="fr g5 mb8" style="flex-wrap:wrap">' + arrows + '</div>' +
+        '<div style="font-size:12px;font-weight:600;color:var(--g)">"' + c.action + '"</div>' +
+      '</div>' +
+      Badge((c.timeout / 1000).toFixed(1) + 's', 'a') +
+    '</div>';
+  }).join('');
+
+  return Card('Saved Combos', rows);
 }
 
 
 // ═══ views/SettingsView.js ═══
-// views/SettingsView.js — Gesture Detection v1.0
-// Gemini AI, Camera, TTS, Recognition confidence, Admin
+// views/SettingsView.js
 function renderSettingsTab(state) {
-  var camActive      = state.camActive;
-  var tts            = state.tts        || { enabled: true, auto: false, rate: 1.0 };
-  var confThresh     = state.confThresh || 0.65;
-  var apiKey         = state.apiKey     || '';
-  var apiStatus      = state.apiStatus  || 'none';
-  var mqttConnected  = state.mqttConnected  || false;
-  var mqttEnabled    = state.mqttEnabled    || false;
-  var mqttBroker     = state.mqttBroker     || '';
-  var mqttTopic      = state.mqttTopic      || '';
+  var tts       = state.tts       || { enabled: true, auto: false, rate: 1.0 };
+  var confThresh = state.confThresh || 0.65;
+  var apiKey    = state.apiKey    || '';
+  var apiStatus = state.apiStatus || 'none';
+  var mqttConnected = state.mqttConnected || false;
+  var mqttBroker    = state.mqttBroker    || '';
+  var mqttTopic     = state.mqttTopic     || '';
 
-  var gemBorder = apiStatus === 'ok' ? 'var(--g)' : apiStatus === 'error' ? 'var(--r)' : 'var(--brd)';
-  var gemBtn    = apiStatus === 'ok' ? 'g' : 'a';
-  var gemLabel  = apiStatus === 'ok' ? '✓ Active' : 'Connect';
-  var gemStatus = apiStatus === 'ok'
-    ? '<div style="padding:6px 10px;background:var(--gD);border-radius:6px;font-size:10px;color:var(--g)">✓ Gemini connected</div>'
-    : '';
+  return (
+    _renderGeminiCard(apiKey, apiStatus) +
+    _renderMQTTCard(mqttConnected, mqttBroker, mqttTopic) +
+    _renderCameraCard(state.camActive) +
+    _renderTTSCard(tts) +
+    _renderRecognitionCard(confThresh) +
+    _renderBackupCard() +
+    _renderAdminCard()
+  );
+}
 
+function _renderGeminiCard(apiKey, apiStatus) {
+  var isConnected = apiStatus === 'ok';
+  var borderColor = isConnected ? 'rgba(78,203,158,.2)' : 'transparent';
   var gemFn = "(async function(){await window._app.connectGemini(document.getElementById('apiKeyInput').value)})()";
 
-  var out = '';
-
-  out += Card('✨ Google Gemini AI',
+  return Card(
+    '✨ Gemini AI',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
-      'AI suggestions, grammar correction, sentence completion. Free at aistudio.google.com' +
+      'Next-word suggestions, grammar correction, sentence completion. ' +
+      'Get a free key at <span style="color:var(--g)">aistudio.google.com</span>.' +
     '</div>' +
     '<div class="fr g6 mb8">' +
-      '<input class="inp f1" id="apiKeyInput" type="password" placeholder="Paste Gemini API key..." value="' + apiKey + '" style="border-color:' + gemBorder + '">' +
-      Btn(gemLabel, gemFn, gemBtn) +
-    '</div>' + gemStatus,
-    'border-color:rgba(251,191,36,.2)'
-  );
-
-  var mqttDot    = mqttConnected ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--g);margin-right:5px"></span>' : '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dm);margin-right:5px"></span>';
-  var mqttStatus = mqttConnected ? '<div style="font-size:10px;color:var(--g);padding:6px 10px;background:var(--gD);border-radius:6px;margin-top:8px">✓ Publishing gestures to broker</div>' : '';
-  out += Card('📡 MQTT Publish (Camera Mode)',
-    '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:10px">' +
-      'Publish recognized gestures in real-time so other devices (Raspberry Pi, Arduino, phone) can subscribe and react.' +
+      '<input class="inp f1" id="apiKeyInput" type="password" placeholder="Paste API key…" value="' + apiKey + '">' +
+      Btn(isConnected ? '✓ Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
     '</div>' +
-    SettingRow(mqttDot + (mqttConnected ? 'Connected' : 'Disconnected'), mqttConnected ? mqttBroker : 'HiveMQ public broker',
-      mqttConnected
+    (isConnected ? '<div style="font-size:10px;color:var(--g)">✓ Gemini is active</div>' : ''),
+    'border-color:' + borderColor
+  );
+}
+
+function _renderMQTTCard(connected, broker, topic) {
+  var statusDot = connected
+    ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--g);margin-right:5px"></span>'
+    : '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dm);margin-right:5px"></span>';
+
+  return Card(
+    '📡 MQTT Publish',
+    '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:10px">' +
+      'Publish recognized gestures to any MQTT subscriber — Raspberry Pi, Arduino, another phone.' +
+    '</div>' +
+    SettingRow(
+      statusDot + (connected ? 'Connected' : 'Disconnected'),
+      connected ? broker : 'HiveMQ public broker',
+      connected
         ? Btn('Disconnect', 'window._app.disconnectMQTT()', 'r', 'sm')
         : Btn('Connect', 'window._app.connectMQTT()', 'g', 'sm')
     ) +
-    (mqttConnected
-      ? '<div style="font-size:9px;color:var(--dm);margin-top:6px">Topic: <span style="color:var(--p)">' + mqttTopic + '</span></div>'
-      : '') +
-    mqttStatus +
-    '<div style="font-size:9px;color:var(--dm);margin-top:8px">Subscribe on any device:<br>' +
-    '<code style="color:var(--a)">mosquitto_sub -h broker.hivemq.com -t "' + (mqttTopic || 'gesture-detection/results/gesture') + '"</code></div>'
+    (connected
+      ? '<div style="font-size:9px;color:var(--dm);margin-top:6px">Topic: <span style="color:var(--p)">' + topic + '</span></div>' +
+        '<div style="font-size:10px;color:var(--g);padding:6px 10px;background:var(--gD);border-radius:6px;margin-top:8px">✓ Publishing gestures to broker</div>'
+      : '<div style="font-size:9px;color:var(--dm);margin-top:8px">' +
+          'Subscribe anywhere: <code style="color:var(--a)">mosquitto_sub -h broker.hivemq.com -t "' + (topic || 'gesture-detection/results/gesture') + '"</code>' +
+        '</div>')
   );
+}
 
-  out += Card('📷 Camera',
-    SettingRow('Live Camera', 'MediaPipe Holistic — hands + face + body',
+function _renderCameraCard(camActive) {
+  return Card(
+    '📷 Camera',
+    SettingRow(
+      'Live camera',
+      'MediaPipe Holistic — hands + face + body',
       Toggle(camActive, camActive ? 'window._app.stopCamera()' : 'window._app.startCamera()')
     ) +
     '<div style="font-size:9px;color:var(--dm);margin-top:6px">41 features: hand×11×2 + face×8 + pose×6 + flags×3</div>'
   );
+}
 
-  out += Card('🔊 Text-to-Speech',
-    SettingRow('Enable TTS', '', Toggle(tts.enabled, 'window._app.setTTSEnabled(' + String(!tts.enabled) + ')')) +
-    SettingRow('Auto-Speak', '', Toggle(tts.auto, 'window._app.setAutoSpeak(' + String(!tts.auto) + ')')) +
-    SettingRow('Speed: ' + tts.rate.toFixed(1) + 'x', '',
+function _renderTTSCard(tts) {
+  return Card(
+    '🔊 Text-to-Speech',
+    SettingRow('Enable TTS', '', Toggle(tts.enabled, 'window._app.setTTSEnabled(' + !tts.enabled + ')')) +
+    SettingRow('Auto-speak on gesture', '', Toggle(tts.auto, 'window._app.setAutoSpeak(' + !tts.auto + ')')) +
+    SettingRow(
+      'Speed: ' + tts.rate.toFixed(1) + '×',
+      '',
       '<input type="range" min=".5" max="2" step=".1" value="' + tts.rate + '" ' +
       'oninput="window._app.setTTSRate(parseFloat(this.value))" style="width:100px;accent-color:var(--g)">'
     )
   );
+}
 
-  out += Card('🎯 Recognition',
-    SettingRow('Confidence: ' + Math.round(confThresh * 100) + '%', '',
+function _renderRecognitionCard(confThresh) {
+  return Card(
+    '🎯 Recognition',
+    SettingRow(
+      'Confidence: ' + Math.round(confThresh * 100) + '%',
+      'Minimum confidence before a gesture is accepted',
       '<input type="range" min=".3" max=".95" step=".05" value="' + confThresh + '" ' +
       'oninput="window._app.setConfThreshold(parseFloat(this.value))" style="width:100px;accent-color:var(--g)">'
     ) +
     '<div style="font-size:9px;color:var(--dm);margin-top:6px">' +
-    'Letter hold 600ms · Word hold 900ms · LSTM threshold 75%<br>' +
-    'Letter cooldown 400ms · Same letter 1200ms · Word cooldown 1800ms' +
+      'Letter hold 600ms · Word hold 900ms · Same letter cooldown 1.2s' +
     '</div>'
   );
+}
 
-  out += Card('💾 Model Backup',
+function _renderBackupCard() {
+  return Card(
+    '💾 Data Backup',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
-      'Save all your training data to a file. Reload it anytime — on this device or a new deployment.' +
+      'Export all training samples and settings to a JSON file. Import on any device.' +
     '</div>' +
     '<div class="fr g6 mb8">' +
       Btn('⬇ Export', 'window._app.exportDataset()', 'g') +
-      Btn('⬆ Import', 'document.getElementById(\'importFileInput\').click()', 'a') +
+      Btn('⬆ Import', 'document.getElementById(\'importFileInput\').click()', 'o') +
     '</div>' +
     '<input type="file" id="importFileInput" accept=".json" style="display:none" ' +
-      'onchange="window._app.importDataset(this.files[0]);this.value=\'\'">' +
-    '<div style="font-size:9px;color:var(--dm);margin-top:4px">' +
-      'Export saves: training samples + gesture list · Import merges into current dataset' +
-    '</div>'
+      'onchange="window._app.importDataset(this.files[0]);this.value=\'\'">'
   );
+}
 
-  out += Card('🔒 Admin',
-    SettingRow('Change PIN', '',
-      '<input class="inp" style="width:80px" id="newPin" placeholder="PIN" maxlength="6">' +
-      '<button class="btn btn-o btn-sm" style="margin-left:8px" ' +
-      'onclick="window._app.setAdminPin(document.getElementById(\'newPin\').value);' +
-      'document.getElementById(\'newPin\').value=\'\';alert(\'PIN updated\')">Set</button>'
+function _renderAdminCard() {
+  return Card(
+    '🔒 Admin',
+    SettingRow(
+      'Change PIN',
+      '',
+      '<div class="fr g6">' +
+        '<input class="inp" style="width:80px" id="newPin" placeholder="PIN" maxlength="6" type="password">' +
+        '<button class="btn btn-o btn-sm" onclick="' +
+          'var p=document.getElementById(\'newPin\').value.trim();' +
+          'if(!p){alert(\'Enter a PIN first\');}' +
+          'else{window._app.setAdminPin(p);document.getElementById(\'newPin\').value=\'\';alert(\'PIN updated\')}' +
+        '">Set</button>' +
+      '</div>'
     ) +
     SettingRow('Exit Admin', '', Btn('← User Mode', "window._app.switchMode('user')", 'o', 'sm'))
   );
-
-  return out;
 }
 
 
 // ═══ views/UserModeView.js ═══
 // views/UserModeView.js — Clean end-user interface
-function renderUserMode(state){
-  const {camActive,cameraError,running,displayText,spelling,suggestions,wordSuggestions,completion,contextState,staticTrained,dynamicTrained}=state;
-  const trained=staticTrained||dynamicTrained;
+function renderUserMode(state) {
+  var {
+    camActive, cameraError, running, displayText, spelling,
+    suggestions, wordSuggestions, completion, contextState,
+    staticTrained, dynamicTrained, inputMode
+  } = state;
 
-  return`
-  <div style="padding:12px 0 6px;display:flex;align-items:center;justify-content:space-between">
-    <div>
-      <div style="font-size:10px;letter-spacing:.2em;color:var(--g);font-weight:700">✋ SIGNLENS</div>
-      <div style="font-size:16px;font-weight:700">Gesture <span style="color:var(--g)">Communication</span></div>
-    </div>
-    <button class="btn btn-o btn-sm" onclick="document.getElementById('userSettings').style.display=document.getElementById('userSettings').style.display==='none'?'block':'none'" style="font-size:16px;padding:8px">⚙</button>
-  </div>
+  var trained = staticTrained || dynamicTrained;
 
-  <!-- Mini settings (hidden by default) -->
-  <div id="userSettings" style="display:none" class="cd">
-    <div class="srow"><div><div class="srow-label">Speech Rate</div></div>
-      <input type="range" min=".5" max="2" step=".1" value="${state.tts.rate}" oninput="window._app.setTTSRate(parseFloat(this.value))" style="width:100px;accent-color:var(--g)">
-    </div>
-    <div class="srow"><div><div class="srow-label">Input</div></div>
-      <select onchange="window._app.setInputMode(this.value)" style="background:var(--s1);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:4px 8px;font-family:inherit;font-size:11px">
-        <option value="camera" ${state.inputMode==='camera'?'selected':''}>Camera</option>
-        <option value="glove" ${state.inputMode==='glove'?'selected':''}>Glove</option>
-        <option value="both" ${state.inputMode==='both'?'selected':''}>Both</option>
-      </select>
-    </div>
-    <div style="border-top:1px solid var(--brd);padding-top:10px;margin-top:8px">
-      <button class="btn btn-o btn-sm" onclick="const pin=prompt('Enter Admin PIN:');if(pin&&window._app.checkAdminPin(pin)){window._app.switchMode('admin')}else if(pin){alert('Wrong PIN')}">🔒 Admin Mode</button>
-    </div>
-  </div>
+  return (
+    _renderUserHeader(state) +
+    _renderUserSettings(state, inputMode) +
+    _renderUserCamera(camActive, cameraError, trained, running) +
+    _renderUserSentence(state, displayText, spelling, suggestions, wordSuggestions, completion, contextState) +
+    _renderUserFingers()
+  );
+}
 
-  <!-- Camera Feed (large) -->
-  <div class="cd" style="padding:0;overflow:hidden;position:relative">
-    <div class="vid-wrap" style="min-height:300px">
-      <div id="vidContainer" style="width:100%;height:100%"></div>
-      <div class="vid-badges">
-        <span class="bg bg-g" id="fpsB">-- FPS</span>
-        <span class="bg bg-p" id="handB">No Hand</span>
-      </div>
-      <div class="vid-gesture" id="gestDisp" style="display:none">
-        <div class="gesture-name" id="gestName"></div>
-        <div class="gesture-conf" id="gestConf"></div>
-      </div>
-      ${!camActive?'<div class="vid-overlay"><div style="font-size:48px">✋</div><div style="font-size:12px;letter-spacing:.1em">TAP START</div></div>':''}
-    </div>
-    <!-- System gesture progress bar -->
-    <div style="height:3px;background:var(--s1);position:relative"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>
-  </div>
+function _renderUserHeader(state) {
+  return '<div style="padding:12px 0 8px;display:flex;align-items:center;justify-content:space-between">' +
+    '<div>' +
+      '<div style="font-size:9px;letter-spacing:.2em;color:var(--g);font-weight:700">✋ GESTURE DETECTION</div>' +
+      '<div style="font-size:15px;font-weight:700">Sign to <span style="color:var(--g)">Communicate</span></div>' +
+    '</div>' +
+    '<button class="btn btn-o btn-sm" ' +
+      'onclick="document.getElementById(\'userSettings\').style.display=' +
+        'document.getElementById(\'userSettings\').style.display===\'none\'?\'block\':\'none\'" ' +
+      'style="font-size:16px;padding:7px">⚙</button>' +
+  '</div>';
+}
 
-  <!-- Start/Stop -->
-  <div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px">
-    ${camActive?`<button class="btn btn-r" onclick="window._app.stopCamera()">■ Stop Camera</button>`
-      :`<button class="btn btn-o" onclick="window._app.startCamera()">${cameraError?'⚠ Retry Camera':'📷 Start Camera'}</button>`}
-    ${cameraError?`<div style="font-size:10px;color:var(--r);margin-top:6px;padding:8px 12px;background:rgba(251,113,133,.1);border-radius:8px;border:1px solid var(--r);text-align:center">⚠ ${cameraError}</div>`:''}
-    ${trained&&!running?`<button class="btn btn-g" onclick="window._app.startRecognition()">▶ Recognize</button>`:''}
-    ${running?`<button class="btn btn-r" onclick="window._app.stopRecognition()">■ Stop</button>`:''}
-  </div>
+function _renderUserSettings(state, inputMode) {
+  return '<div id="userSettings" style="display:none" class="cd">' +
+    '<div class="srow"><div><div class="srow-label">Speech rate</div></div>' +
+      '<input type="range" min=".5" max="2" step=".1" value="' + state.tts.rate + '" ' +
+        'oninput="window._app.setTTSRate(parseFloat(this.value))" ' +
+        'style="width:100px;accent-color:var(--g)">' +
+    '</div>' +
+    '<div class="srow"><div><div class="srow-label">Input source</div></div>' +
+      '<select onchange="window._app.setInputMode(this.value)" ' +
+        'style="background:var(--s1);color:var(--tx);border:1px solid var(--brd);border-radius:6px;padding:4px 8px;font-family:inherit;font-size:11px">' +
+        '<option value="camera" ' + (inputMode === 'camera' ? 'selected' : '') + '>Camera</option>' +
+        '<option value="glove"  ' + (inputMode === 'glove'  ? 'selected' : '') + '>Glove</option>' +
+        '<option value="both"   ' + (inputMode === 'both'   ? 'selected' : '') + '>Both</option>' +
+      '</select>' +
+    '</div>' +
+    '<div style="padding-top:10px;margin-top:4px">' +
+      '<button class="btn btn-o btn-sm" onclick="' +
+        'var pin=prompt(\'Enter admin PIN:\');' +
+        'if(pin&&window._app.checkAdminPin(pin)){window._app.switchMode(\'admin\')}' +
+        'else if(pin){alert(\'Wrong PIN\')}' +
+      '">🔒 Admin</button>' +
+    '</div>' +
+  '</div>';
+}
 
-  <!-- Sentence Display (large, prominent) -->
-  <div class="cd">
-    <div style="background:var(--s1);border:1px solid var(--brd);border-radius:10px;padding:16px 20px;min-height:56px;font-size:20px;font-weight:600;line-height:1.5;margin-bottom:12px;color:${displayText?'var(--tx)':'var(--dm)'}">
-      ${displayText||'Start signing to communicate...'}<span class="cursor"></span>
-    </div>
+function _renderUserCamera(camActive, cameraError, trained, running) {
+  return '<div class="cd" style="padding:0;overflow:hidden;position:relative;margin-bottom:10px">' +
+    '<div class="vid-wrap" style="min-height:280px">' +
+      '<div id="vidContainer" style="width:100%;height:100%"></div>' +
+      '<div class="vid-badges">' +
+        '<span class="bg bg-g" id="fpsB">-- FPS</span>' +
+        '<span class="bg bg-d" id="handB">No Hand</span>' +
+      '</div>' +
+      '<div class="vid-gesture" id="gestDisp" style="display:none">' +
+        '<div class="gesture-name" id="gestName"></div>' +
+        '<div class="gesture-conf" id="gestConf"></div>' +
+      '</div>' +
+      (!camActive ? '<div class="vid-overlay"><div style="font-size:40px">✋</div><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
+    '</div>' +
+    '<div style="height:3px;background:var(--s2)"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>' +
+  '</div>' +
 
-    ${spelling?`<div style="font-size:10px;color:var(--p);letter-spacing:.12em;margin-bottom:6px">SPELLING: ${spelling.toUpperCase()}_</div>`:''}
+  '<div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px;flex-wrap:wrap">' +
+    (camActive
+      ? '<button class="btn btn-r" onclick="window._app.stopCamera()">■ Stop Camera</button>'
+      : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? '⚠ Retry Camera' : '📷 Start Camera') + '</button>') +
+    (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">⚠ ' + cameraError + '</div>' : '') +
+    (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">▶ Recognize</button>' : '') +
+    (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">■ Stop</button>' : '') +
+  '</div>';
+}
 
-    <!-- Word suggestions from spelling -->
-    ${wordSuggestions.length?`<div style="margin-bottom:8px"><div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">WORD MATCHES (hold 1-${Math.min(5,wordSuggestions.length)} fingers to select)</div>
-      <div class="suggs">${wordSuggestions.map((w,i)=>`<span class="sugg ai"><span style="font-size:8px;opacity:.6">${i+1}.</span> ${w}</span>`).join('')}</div></div>`:''}
+function _renderUserSentence(state, displayText, spelling, suggestions, wordSuggestions, completion, contextState) {
+  return '<div class="cd">' +
+    '<div style="background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:14px 16px;' +
+      'min-height:52px;font-size:19px;font-weight:600;line-height:1.5;margin-bottom:12px;' +
+      'color:' + (displayText ? 'var(--tx)' : 'var(--dm)') + '">' +
+      (displayText || 'Start signing to communicate…') +
+      '<span class="cursor"></span>' +
+    '</div>' +
 
-    <!-- Sentence-level suggestions -->
-    ${!spelling&&suggestions.length?`<div><div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">${state.geminiEnabled?'AI':'LOCAL'} PREDICTIONS (hold fingers to select)</div>
-      <div class="suggs">${suggestions.map((w,i)=>`<span class="sugg${state.geminiEnabled?' ai':''}"><span style="font-size:8px;opacity:.6">${i+1}.</span> ${w}</span>`).join('')}</div></div>`:''}
+    (spelling ? '<div style="font-size:10px;color:var(--p);letter-spacing:.1em;margin-bottom:6px">SPELLING: ' + spelling.toUpperCase() + '_</div>' : '') +
 
-    <!-- Completion -->
-    ${completion&&completion!==state.sentence?`<div class="completion" onclick="window._app.acceptCompletion()"><div class="completion-label">✨ AI suggests</div><div class="completion-text">"${completion}"</div></div>`:''}
+    (wordSuggestions.length
+      ? '<div style="margin-bottom:8px">' +
+          '<div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">WORD MATCHES</div>' +
+          '<div class="suggs">' +
+            wordSuggestions.map(function(w, i) {
+              return '<span class="sugg ai"><span style="font-size:8px;opacity:.6">' + (i + 1) + '.</span> ' + w + '</span>';
+            }).join('') +
+          '</div>' +
+        '</div>'
+      : '') +
 
-    <!-- Context state indicator -->
-    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px">
-      <span style="font-size:9px;color:var(--dm);letter-spacing:.1em">${contextState} ${state.geminiEnabled?'· GEMINI AI':''}</span>
-      <div style="font-size:9px;color:var(--dm)">✊=Speak  🖐=Clear  👎=Undo</div>
-    </div>
-  </div>
+    (!spelling && suggestions.length
+      ? '<div>' +
+          '<div style="font-size:9px;color:var(--mx);margin-bottom:4px;letter-spacing:.1em">' +
+            (state.geminiEnabled ? 'AI' : 'LOCAL') + ' PREDICTIONS' +
+          '</div>' +
+          '<div class="suggs">' +
+            suggestions.map(function(w, i) {
+              return '<span class="sugg' + (state.geminiEnabled ? ' ai' : '') + '">' +
+                '<span style="font-size:8px;opacity:.6">' + (i + 1) + '.</span> ' + w +
+              '</span>';
+            }).join('') +
+          '</div>' +
+        '</div>'
+      : '') +
 
-  <!-- Finger bars (compact) -->
-  <div class="cd">
-    ${FingerBars(APP_CONFIG.FINGER_NAMES,APP_CONFIG.FINGER_COLORS)}
-  </div>`;
+    (completion && completion !== state.sentence
+      ? '<div class="completion" onclick="window._app.acceptCompletion()">' +
+          '<div class="completion-label">✨ AI suggests</div>' +
+          '<div class="completion-text">"' + completion + '"</div>' +
+        '</div>'
+      : '') +
+
+    '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px">' +
+      '<span style="font-size:9px;color:var(--dm);letter-spacing:.1em">' + contextState + ' ' + (state.geminiEnabled ? '· Gemini AI' : '') + '</span>' +
+      '<div style="font-size:9px;color:var(--dm)">✊=Speak · 🖐=Clear · 👎=Undo</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function _renderUserFingers() {
+  return '<div class="cd">' + FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS) + '</div>';
 }
 
 
@@ -3896,38 +4281,6 @@ class AppController {
   }
 
   // ── Export / Import ───────────────────────────────────────────────────────
-  async exportDataset() {
-    try {
-      var res  = await fetch(API + '/export/json');
-      var blob = await res.blob();
-      var url  = URL.createObjectURL(blob);
-      var a    = document.createElement('a');
-      a.href = url; a.download = 'signlens_dataset.json';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch(e) { alert('Export failed: ' + e.message); }
-  }
-
-  async importDataset(file) {
-    if (!file) return;
-    var self = this;
-    try {
-      var text   = await file.text();
-      var data   = JSON.parse(text);
-      var res    = await fetch(API + '/import/json', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(data)
-      });
-      var result = await res.json();
-      alert('Imported: ' + result.imported.static + ' static, ' + result.imported.dynamic + ' dynamic samples, ' + result.imported.gestures + ' gestures');
-      await self.gestureModel.loadFromDB();
-      await self._refreshTrainMeta();
-      self.view.render();
-    } catch(e) { alert('Import failed: ' + e.message); }
-  }
-
   async viewSampleDetails(gestureName) {
     var preview = await this.db.getSamplePreview(gestureName, 3);
     window._samplePreview = preview;
@@ -3973,8 +4326,6 @@ class AppController {
     this.view.render();
     return ok;
   }
-
-  // ── VR ────────────────────────────────────────────────────────────────────
 
   // ── Sequences ─────────────────────────────────────────────────────────────
   addCombo(seq, action) { this.seqCtrl.addCombo(seq, action); this.view.render(); }
@@ -4026,8 +4377,6 @@ class AppController {
     };
     reader.readAsText(file);
   }
-
-
 
   async collectSamples(name) {
     if (this.sensorModel.handDetected) {

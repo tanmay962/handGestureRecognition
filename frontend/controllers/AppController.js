@@ -556,38 +556,6 @@ export class AppController {
   }
 
   // ── Export / Import ───────────────────────────────────────────────────────
-  async exportDataset() {
-    try {
-      var res  = await fetch(API + '/export/json');
-      var blob = await res.blob();
-      var url  = URL.createObjectURL(blob);
-      var a    = document.createElement('a');
-      a.href = url; a.download = 'signlens_dataset.json';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch(e) { alert('Export failed: ' + e.message); }
-  }
-
-  async importDataset(file) {
-    if (!file) return;
-    var self = this;
-    try {
-      var text   = await file.text();
-      var data   = JSON.parse(text);
-      var res    = await fetch(API + '/import/json', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(data)
-      });
-      var result = await res.json();
-      alert('Imported: ' + result.imported.static + ' static, ' + result.imported.dynamic + ' dynamic samples, ' + result.imported.gestures + ' gestures');
-      await self.gestureModel.loadFromDB();
-      await self._refreshTrainMeta();
-      self.view.render();
-    } catch(e) { alert('Import failed: ' + e.message); }
-  }
-
   async viewSampleDetails(gestureName) {
     var preview = await this.db.getSamplePreview(gestureName, 3);
     window._samplePreview = preview;
@@ -633,8 +601,6 @@ export class AppController {
     this.view.render();
     return ok;
   }
-
-  // ── VR ────────────────────────────────────────────────────────────────────
 
   // ── Sequences ─────────────────────────────────────────────────────────────
   addCombo(seq, action) { this.seqCtrl.addCombo(seq, action); this.view.render(); }
@@ -686,8 +652,6 @@ export class AppController {
     };
     reader.readAsText(file);
   }
-
-
 
   async collectSamples(name) {
     if (this.sensorModel.handDetected) {
