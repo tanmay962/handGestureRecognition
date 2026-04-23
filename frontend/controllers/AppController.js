@@ -15,7 +15,6 @@ import {StorageService} from '../services/StorageService.js';
 import {MQTTService} from '../services/MQTTService.js';
 import {RecognitionController} from './RecognitionController.js';
 import {TrainingController} from './TrainingController.js';
-import {SequenceController} from './SequenceController.js';
 import {AppView} from '../views/AppView.js';
 
 var API = '/api';
@@ -42,9 +41,8 @@ export class AppController {
     this.nlp    = new NLPService(this.gemini);
     this.tts    = new TTSService();
 
-    this.seqCtrl   = new SequenceController();
     this.recogCtrl = new RecognitionController(this.staticNN, this.dynamicNN,
-                       this.sensorModel, this.sentenceModel, this.nlp, this.tts, this.seqCtrl);
+                       this.sensorModel, this.sentenceModel, this.nlp, this.tts);
     this.trainCtrl = new TrainingController(this.staticNN, this.dynamicNN,
                        this.gestureModel, this.sensorModel);
     this.view      = new AppView(root, this);
@@ -109,19 +107,20 @@ export class AppController {
     eventBus.on(Events.TRAIN_PROGRESS,     rr);
     eventBus.on(Events.TRAIN_COMPLETE,     rr);
     eventBus.on(Events.SENTENCE_UPDATED,   rr);
-    eventBus.on(Events.COMBO_DETECTED,     rr);
     eventBus.on(Events.SYSTEM_GESTURE,     rr);
     eventBus.on(Events.SPELLING_UPDATED,   rr);
     eventBus.on(Events.RECORDING_DONE,     rr);
     eventBus.on(Events.STATE_UPDATED,      rr);
     eventBus.on(Events.SAMPLES_COLLECTED,  function() { self._refreshTrainMeta(); rr(); });
 
-    // Update finger curl bars directly in DOM (no re-render needed)
+    // Update finger curl bars for BOTH hands — dom (feat 0-4) + aux (feat 11-15)
+    // UI bars: indices 0-4 = dominant hand, 5-9 = auxiliary hand
     eventBus.on(Events.FEATURES_EXTRACTED, function(d) {
       var f = d.features;
-      if (!f || f.length < 5) return;
-      for (var i = 0; i < 5; i++) {
-        var pct = Math.round(f[i] * 100);
+      if (!f || f.length < 16) return;
+      var srcIdx = [0,1,2,3,4, 11,12,13,14,15]; // dom curls then aux curls
+      for (var i = 0; i < 10; i++) {
+        var pct = Math.round(f[srcIdx[i]] * 100);
         // Detect tab — vertical bars
         var fb = document.getElementById('fb' + i);
         var fv = document.getElementById('fv' + i);
@@ -626,9 +625,6 @@ export class AppController {
     return ok;
   }
 
-  // ── Sequences ─────────────────────────────────────────────────────────────
-  addCombo(seq, action) { this.seqCtrl.addCombo(seq, action); this.view.render(); }
-
   // ── Settings ──────────────────────────────────────────────────────────────
   setTTSEnabled(v)    { this.tts.enabled   = v; this.view.render(); }
   setAutoSpeak(v)     { this.tts.autoSpeak = v; this.view.render(); }
@@ -710,7 +706,7 @@ export class AppController {
       gestures:        this.gestureModel.gestures,
       sampleCounts:    this.gestureModel.sampleCounts,
       trainStats:      this.trainCtrl.getStats(),
-      combos:          this.seqCtrl.getAllCombos(),
+      combos:          [],
       sensor:          this.sensorModel,
       tts:             {enabled:this.tts.enabled, auto:this.tts.autoSpeak, rate:this.tts.rate},
       confThresh:      this.recogCtrl.confThresh,

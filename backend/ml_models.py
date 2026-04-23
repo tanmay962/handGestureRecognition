@@ -340,25 +340,33 @@ class GestureLSTM(nn.Module):
         self.num_layers    = num_layers
         self.bidirectional = bidirectional
         nd = 2 if bidirectional else 1
+        dim = hidden_size * nd
 
         self.lstm    = nn.LSTM(input_size, hidden_size, num_layers,
                                batch_first=True,
                                dropout=dropout if num_layers > 1 else 0.0,
                                bidirectional=bidirectional)
-        self.attn    = nn.Linear(hidden_size * nd, 1)
+        # Multi-head-style attention: two parallel attention heads averaged
+        self.attn1   = nn.Linear(dim, 1)
+        self.attn2   = nn.Linear(dim, 1)
         self.dropout = nn.Dropout(dropout)
-        self.norm    = nn.LayerNorm(hidden_size * nd)
-        self.fc      = nn.Linear(hidden_size * nd, output_size)
+        self.norm    = nn.LayerNorm(dim)
+        # Classification head with an extra hidden layer for richer representation
+        self.fc1     = nn.Linear(dim, dim // 2)
+        self.act     = nn.GELU()
+        self.fc2     = nn.Linear(dim // 2, output_size)
 
     def forward(self, x):
         nd = 2 if self.bidirectional else 1
         h0 = torch.zeros(self.num_layers * nd, x.size(0), self.hidden_size).to(x.device)
         c0 = torch.zeros(self.num_layers * nd, x.size(0), self.hidden_size).to(x.device)
-        out, _ = self.lstm(x, (h0, c0))
-        # Temporal attention: weight frames by relevance
-        attn_w = torch.softmax(self.attn(out), dim=1)
-        ctx    = (attn_w * out).sum(dim=1)
-        return self.fc(self.dropout(self.norm(ctx)))
+        out, _ = self.lstm(x, (h0, c0))   # (B, T, dim)
+        # Two-head temporal attention — each head attends to different time scales
+        w1  = torch.softmax(self.attn1(out), dim=1)
+        w2  = torch.softmax(self.attn2(out), dim=1)
+        ctx = ((w1 + w2) / 2.0 * out).sum(dim=1)
+        h   = self.norm(ctx)
+        return self.fc2(self.dropout(self.act(self.fc1(self.dropout(h)))))
 
 
 class LSTMModel:
@@ -579,7 +587,7 @@ class UnifiedLSTMModel:
         self.val_accuracy    = 0.0
         self.loss            = 1.0
         self.epochs          = 0
-        self.hidden_size     = 128
+        self.hidden_size     = 192      # up from 128 — richer temporal representations
         self.num_layers      = 2
         self._output_size    = 0
         self._input_size     = DYNAMIC_FEATURES   # 41 — used by nn_predict validation
@@ -665,15 +673,31 @@ class UnifiedLSTMModel:
         opt   = optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-4)
         sched = optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
 
+        # Mini-batch training: 32 samples per step for better gradient estimates
+        BATCH_SIZE = min(32, len(tr_in))
+        n_train    = len(tr_in)
+        perm       = torch.randperm(n_train)
+
         self.model.train()
         for ep in range(epochs):
-            opt.zero_grad()
-            loss = crit(self.model(X), y)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            opt.step()
+            # Shuffle mini-batches each epoch
+            ep_perm = perm[torch.randperm(n_train)]
+            ep_loss = torch.tensor(0.0)
+            steps   = 0
+            for start in range(0, n_train, BATCH_SIZE):
+                idx_b = ep_perm[start:start + BATCH_SIZE]
+                xb    = X[idx_b]
+                yb    = y[idx_b]
+                opt.zero_grad()
+                loss  = crit(self.model(xb), yb)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                opt.step()
+                ep_loss = ep_loss + loss.detach()
+                steps  += 1
+            ep_loss = ep_loss / max(1, steps)
             if ep % 5 == 0:
-                sched.step(loss)
+                sched.step(ep_loss)
 
         self.model.eval()
         with torch.no_grad():
@@ -756,7 +780,7 @@ class UnifiedLSTMModel:
         if not gesture_list:
             return
 
-        self.hidden_size   = d.get("hidden_size",   128)
+        self.hidden_size   = d.get("hidden_size",   192)
         self.num_layers    = d.get("num_layers",    2)
         self._output_size  = d.get("output_size",   len(gesture_list))
         self.feature_version = d.get("feature_version", FEATURE_VERSION)

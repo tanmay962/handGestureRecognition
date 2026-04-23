@@ -267,8 +267,8 @@ input::placeholder { color: var(--dm); }
   border: 1px solid var(--brd);
 }
 
-.vid-wrap video  { width: 100%; display: block; transform: scaleX(-1); }
-.vid-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+.vid-wrap video  { width: 100%; display: block; }
+.vid-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 
 .vid-badges {
   position: absolute;
@@ -382,8 +382,9 @@ input::placeholder { color: var(--dm); }
 
 .completion-text { font-size: 14px; color: var(--tx); font-style: italic; }
 
-/* --- finger bars --- */
-.fgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+/* --- finger bars: 10 columns (5 dom + 5 aux) with a visual divider after col 5 --- */
+.fgrid { display: grid; grid-template-columns: repeat(5, 1fr) 2px repeat(5, 1fr); gap: 6px; align-items: end; }
+.fgrid-div { width: 1px; height: 60px; background: var(--brd); align-self: center; }
 
 .fcol { text-align: center; }
 

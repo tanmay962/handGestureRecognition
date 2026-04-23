@@ -12,7 +12,7 @@ var APP_CONFIG = {
     STATIC_HIDDEN:       [256, 128, 64],
     DYNAMIC_HIDDEN:      [256, 128, 64],
     LEARNING_RATE:       0.008,
-    TRAINING_EPOCHS:     500,   // was 300 — more epochs = better convergence
+    TRAINING_EPOCHS:     500,
     EPOCH_BATCH:         10,
     SAMPLES_PER_GESTURE: 35,
     STATIC_INPUT:        41,
@@ -22,52 +22,51 @@ var APP_CONFIG = {
   },
 
   RECOGNITION: {
-    CONFIDENCE_THRESHOLD:  0.65,
-    // Stability hold — longer = fewer false triggers, more deliberate
-    STABLE_MS_LETTER:      750,   // was 600
-    STABLE_MS_WORD:        1100,  // was 900
-    STABLE_MS_NUMBER:      750,   // was 600
-    // Cooldowns — space out repeated recognitions
-    COOLDOWN_SAME_LETTER:  1600,  // was 1200
-    COOLDOWN_DIFF_LETTER:  550,   // was 400
-    COOLDOWN_WORD:         2200,  // was 1800 — prevents word bursts
-    // Prediction rate limiting
-    PREDICT_EVERY_N:       3,
-    // Confidence smoothing — larger window = smoother, less jittery
-    CONF_SMOOTH_WINDOW:    7,     // was 5
+    CONFIDENCE_THRESHOLD:  0.60,
+    // Stability hold — tuned for responsive demo
+    STABLE_MS_LETTER:      500,
+    STABLE_MS_WORD:        750,
+    STABLE_MS_NUMBER:      500,
+    // Cooldowns — prevent duplicate confirmations
+    COOLDOWN_SAME_LETTER:  1200,
+    COOLDOWN_DIFF_LETTER:  350,
+    COOLDOWN_WORD:         1500,
+    // Prediction rate limiting — every 2 frames for faster response
+    PREDICT_EVERY_N:       2,
+    // Confidence smoothing — 5 frames balances speed + stability
+    CONF_SMOOTH_WINDOW:    5,
     // Motion detection threshold for LSTM activation
-    MOTION_THRESHOLD:      0.08,
-    DYNAMIC_CONF_THRESH:   0.75,
+    MOTION_THRESHOLD:      0.06,
+    DYNAMIC_CONF_THRESH:   0.70,
     DWELL_TIME:            1500,
-    SPELL_PAUSE:           2200,  // was 2000
+    SPELL_PAUSE:           1800,
     // NLP debounce
-    NLP_DEBOUNCE_MS:       400,   // was 300
-    // Ensemble voting — more history = more stable argmax
-    ENSEMBLE_WINDOW:       7,     // was 5
-    // TTS word-queue buffer — accumulate words before speaking (ms)
-    TTS_BUFFER_MS:         1800,
-
-    // Hysteresis — lower exit threshold keeps active gesture alive during brief dips
-    HYSTERESIS_EXIT:          0.45,
-    // Streak gate — require this many consecutive same-gesture frames before hold timer starts
-    MIN_STREAK_FRAMES:        3,
-    // Rejection zone — below this confidence always treat as no gesture
-    MIN_REJECT_CONF:          0.15,
-    // Dynamic priority margin — dynamic model wins if within this fraction of static conf
+    NLP_DEBOUNCE_MS:       300,
+    // Ensemble voting
+    ENSEMBLE_WINDOW:       5,
+    // TTS word-queue buffer
+    TTS_BUFFER_MS:         1500,
+    // Hysteresis — keep active gesture alive during brief dips
+    HYSTERESIS_EXIT:          0.40,
+    // Streak gate — frames before hold timer starts
+    MIN_STREAK_FRAMES:        2,
+    // Rejection zone
+    MIN_REJECT_CONF:          0.12,
+    // Dynamic priority margin
     DYNAMIC_PRIORITY_MARGIN:  0.05,
-    // Prediction trail — number of recent confirmed gestures to show
+    // Prediction trail
     PRED_TRAIL_SIZE:          5,
-    // Adaptive cooldown — factor and window applied after user manually interacts
-    ADAPTIVE_COOLDOWN_FACTOR: 0.65,
+    // Adaptive cooldown
+    ADAPTIVE_COOLDOWN_FACTOR: 0.60,
     ADAPTIVE_COOLDOWN_WINDOW: 3000,
   },
 
   MEDIAPIPE: {
     CDN_BASE:                'https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629',
     MODEL_COMPLEXITY:        1,
-    MIN_DETECTION_CONFIDENCE:0.7,
+    MIN_DETECTION_CONFIDENCE:0.6,
     MIN_TRACKING_CONFIDENCE: 0.5,
-    MIRROR_DISPLAY:          true,
+    MIRROR_DISPLAY:          false,
     DOMINANT_HAND:           'Right',
     HAND_LOSS_ABORT_FRAMES:  3,
     SMOOTH_LANDMARKS:        true,
@@ -100,17 +99,17 @@ var APP_CONFIG = {
     RETRAIN_AFTER_SENTENCES:3,
   },
 
-  SEQUENCE: { WINDOW_SIZE:45, MAX_HISTORY:20, DEFAULT_TIMEOUT:3000 },
-
+  // Tabs — Sequences removed (low usage)
   TABS_ADMIN: [
-    { id:'detect',    label:'Detect'    },
-    { id:'train',     label:'Train'     },
-    { id:'sequences', label:'Sequences' },
-    { id:'settings',  label:'Settings'  },
+    { id:'detect',   label:'Detect'   },
+    { id:'train',    label:'Train'    },
+    { id:'settings', label:'Settings' },
   ],
 
-  FINGER_NAMES:  ['Thumb','Index','Middle','Ring','Pinky'],
-  FINGER_COLORS: ['#5eead4','#a78bfa','#fbbf24','#fb7185','#60a5fa'],
+  // Both hands: DOM hand fingers first (0–4), then AUX hand (5–9) → feature indices 0–4, 11–15
+  FINGER_NAMES:  ['T','I','M','R','P', 'T₂','I₂','M₂','R₂','P₂'],
+  FINGER_COLORS: ['#ffffff','#ffffff','#ffffff','#ffffff','#ffffff',
+                  'rgba(255,255,255,0.55)','rgba(255,255,255,0.55)','rgba(255,255,255,0.55)','rgba(255,255,255,0.55)','rgba(255,255,255,0.55)'],
   ADMIN_PIN: '1234',
 };
 

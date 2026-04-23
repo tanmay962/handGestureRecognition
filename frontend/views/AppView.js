@@ -63,10 +63,9 @@ function _renderTabs(state) {
 
 function _renderTabContent(state) {
   switch (state.tab) {
-    case 'detect': return renderDetectTab(state);
-    case 'train': return renderTrainTab(state);
-    case 'sequences': return renderSequenceTab(state);
+    case 'detect':   return renderDetectTab(state);
+    case 'train':    return renderTrainTab(state);
     case 'settings': return renderSettingsTab(state);
-    default: return renderDetectTab(state);
+    default:         return renderDetectTab(state);
   }
 }

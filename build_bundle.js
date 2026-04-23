@@ -27,11 +27,9 @@ const FILES = [
   'views/AppView.js',
   'views/DetectView.js',
   'views/TrainView.js',
-  'views/SequenceView.js',
   'views/SettingsView.js',
   'views/UserModeView.js',
   'controllers/RecognitionController.js',
-  'controllers/SequenceController.js',
   'controllers/TrainingController.js',
   'controllers/AppController.js',
 ];

@@ -91,18 +91,22 @@ def _sim_one_hand(name, mirror=False):
 
 
 def _sim_face_features(dominant_hand=None):
-    """8 face features: nose_x, nose_y, eye_dist, h1_nose_dx, h1_nose_dy, h2_nose_dx, h2_nose_dy, tilt"""
-    nose_x   = random.uniform(0.4, 0.6)
-    nose_y   = random.uniform(0.3, 0.6)
-    eye_dist = random.uniform(0.3, 0.5)
+    """10 face features: nose_x, nose_y, eye_scale, dom_wrist_dx, dom_wrist_dy,
+    aux_wrist_dx, aux_wrist_dy, tilt, mouth_open, eye_open"""
+    nose_x    = random.uniform(0.4, 0.6)
+    nose_y    = random.uniform(0.3, 0.6)
+    eye_scale = clamp(random.uniform(0.3, 0.5), 0.0, 1.0)
+    # Simulated wrist-to-nose offsets — hand is typically below-right of nose
     if dominant_hand:
-        h1nx = clamp(dominant_hand[5] - nose_x + noise(0.05), -1, 1)
-        h1ny = clamp(dominant_hand[6] - nose_y + noise(0.05), -1, 1)
+        h1nx = clamp(noise(0.25) + 0.1, -1, 1)
+        h1ny = clamp(noise(0.25) + 0.3, -1, 1)   # wrist usually below nose
     else:
         h1nx = noise(0.1)
         h1ny = noise(0.1)
-    tilt = noise(0.05)
-    return [nose_x, nose_y, eye_dist, h1nx, h1ny, 0.0, 0.0, tilt]
+    tilt       = noise(0.05)
+    mouth_open = clamp(noise(0.04), 0.0, 1.0)    # mostly closed
+    eye_open   = clamp(0.5 + noise(0.08), 0.0, 1.0)  # mostly open
+    return [nose_x, nose_y, eye_scale, h1nx, h1ny, 0.0, 0.0, tilt, mouth_open, eye_open]
 
 
 def _sim_pose_features():
@@ -118,7 +122,7 @@ def _sim_pose_features():
 
 
 def simulate_static(name, mirror_aug=False):
-    """41-feature Holistic vector: [dom×11] + [aux×11] + [face×8] + [pose×6] + [flags×3]"""
+    """41-feature Holistic vector: [dom×11] + [aux×11] + [face×10] + [pose×6] + [flags×3]"""
     dom   = _sim_one_hand(name)
     aux   = [0] * 11
     face  = _sim_face_features(dom)

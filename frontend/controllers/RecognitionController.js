@@ -9,14 +9,13 @@
 'use strict';
 
 var RecognitionController = (function() {
-  function RecognitionController(staticNN, dynamicNN, sensorModel, sentenceModel, nlpService, ttsService, sequenceCtrl) {
+  function RecognitionController(staticNN, dynamicNN, sensorModel, sentenceModel, nlpService, ttsService) {
     this.sNN        = staticNN;
     this.dNN        = dynamicNN;
     this.sensor     = sensorModel;
     this.sentence   = sentenceModel;
     this.nlp        = nlpService;
     this.tts        = ttsService;
-    this.seqCtrl    = sequenceCtrl;
     this.running    = false;
     this.confThresh = APP_CONFIG.RECOGNITION.CONFIDENCE_THRESHOLD;
     this.log        = [];
@@ -300,14 +299,15 @@ var RecognitionController = (function() {
     // ── Update hysteresis state ──
     this._hysteresisGesture = finalName || null;
 
-    // ── Reset everything on empty frame ──
+    // ── On empty frame: reset stability but keep ensemble history for smoothing ──
     if (!finalName) {
       this._stableName        = null;
       this._stableStartTime   = null;
-      this._probHistory       = [];
       this._streakName        = null;
       this._streakCount       = 0;
       this._hysteresisGesture = null;
+      // Decay ensemble history rather than wiping it (prevents jitter on brief occlusions)
+      if (this._probHistory.length > 2) this._probHistory.shift();
       eventBus.emit(Events.GESTURE_PREDICTING, { gesture: null, conf: 0, model: '' });
       return;
     }
@@ -416,15 +416,8 @@ var RecognitionController = (function() {
         this.sentence.addWord(this.sentence.getSpelling());
         this.sentence.clearSpelling();
       }
-      var combo = this.seqCtrl.pushGesture(name);
-      if (combo) {
-        this.tts.speak(combo.action);
-        combo.action.split(' ').forEach(function(w) { self.sentence.addWord(w); });
-        eventBus.emit(Events.COMBO_DETECTED, combo);
-      } else {
-        this.sentence.addWordFromGesture(name.toLowerCase(), name);
-        this.tts.speakIfAuto(name);
-      }
+      this.sentence.addWordFromGesture(name.toLowerCase(), name);
+      this.tts.speakIfAuto(name);
       // NLP debounce — wait before fetching
       this._scheduleNLP();
     }

@@ -292,6 +292,7 @@ export class TrainingController {
       staticLoss:      this.staticNN.loss,
       staticEpochs:    this.staticNN.epochs,
       staticTrained:   this.staticNN.trained,
+      valAccuracy:     this.staticNN.val_accuracy || 0,
       dynamicAccuracy: this.dynamicNN.accuracy,
       dynamicLoss:     this.dynamicNN.loss,
       dynamicEpochs:   this.dynamicNN.epochs,

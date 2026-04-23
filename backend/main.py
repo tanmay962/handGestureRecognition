@@ -254,7 +254,7 @@ def start_mqtt_subscriber():
         _mqtt_enabled = False
 
 
-#  App lifespan 
+#  App lifespan
 
 @asynccontextmanager
 async def lifespan(app):
@@ -269,6 +269,24 @@ async def lifespan(app):
         row = db.execute("SELECT value FROM settings WHERE key='conf_threshold'").fetchone()
         if row:
             _conf_threshold = float(row['value'])
+
+        # Auto-load the most recently saved unified model so predictions work
+        # immediately after a server restart without any frontend action
+        model_row = db.execute(
+            "SELECT data FROM models WHERE id LIKE 'unified_%' ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+
+    if model_row:
+        try:
+            unified_nn.from_json(json.loads(model_row['data']))
+            print(
+                f"[Gesture Detection] Auto-loaded saved model | "
+                f"gestures={len(unified_nn.gestures)} acc={unified_nn.accuracy:.3f}"
+            )
+        except Exception as e:
+            print(f"[Gesture Detection] Auto-load failed (will need manual train/load): {e}")
+    else:
+        print("[Gesture Detection] No saved model found — train and save to persist")
 
     start_mqtt_subscriber()
     print(

@@ -1,6 +1,8 @@
 // services/CameraService.js — Gesture Detection v1.0
 // MediaPipe Holistic: hands + face + body = 41 features
-// [hand1x11] + [hand2x11] + [face x8] + [pose x6] + [flags x3] + [pad x2] = 41
+// [hand1x11] + [hand2x11] + [face x10] + [pose x6] + [flags x3] = 41
+// Face (10): nose_x, nose_y, eye_scale, dom_wrist_dx, dom_wrist_dy,
+//            aux_wrist_dx, aux_wrist_dy, tilt, mouth_open, eye_open
 'use strict';
 
 var CameraService = (function() {
@@ -36,10 +38,10 @@ var CameraService = (function() {
     this.videoEl.setAttribute('autoplay', '');
     this.videoEl.setAttribute('playsinline', '');
     this.videoEl.muted = true;
-    this.videoEl.style.cssText = 'width:100%;display:block;transform:scaleX(-1)';
+    this.videoEl.style.cssText = 'width:100%;display:block';
 
     this.canvasEl = document.createElement('canvas');
-    this.canvasEl.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)';
+    this.canvasEl.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%';
   }
 
   CameraService.prototype.initialize = function() {
@@ -94,11 +96,10 @@ var CameraService = (function() {
     });
   };
 
-  // ── Mirror transform (front camera = mirrored, back = normal) ────
+  // ── Mirror transform — no flip so video shows natural orientation ──
   CameraService.prototype._applyMirror = function() {
-    var t = this.facingMode === 'user' ? 'scaleX(-1)' : 'none';
-    this.videoEl.style.transform  = t;
-    this.canvasEl.style.transform = t;
+    this.videoEl.style.transform  = 'none';
+    this.canvasEl.style.transform = 'none';
   };
 
   // ── Switch between front / back camera ───────────────────────
@@ -245,13 +246,14 @@ var CameraService = (function() {
       }
     }
 
-    // Face features (8)
-    var faceFeat = this._extractFaceFeatures(faceLM, dom, aux);
+    // Face features (10): nose, scale, wrist→nose offsets, tilt, mouth open, eye open
+    var faceFeat = this._extractFaceFeatures(faceLM, poseLM, dom, aux);
     // Pose features (6)
     var poseFeat = this._extractPoseFeatures(poseLM, dom, aux);
     // Presence flags (3)
     var flags = [domPresent, auxPresent, this.faceDetected ? 1 : 0];
 
+    // 11 + 11 + 10 + 6 + 3 = 41 exactly
     var vec = (dom || ZEROS_11).concat(aux || ZEROS_11)
               .concat(faceFeat)
               .concat(poseFeat)
@@ -280,37 +282,53 @@ var CameraService = (function() {
     return curls.concat([hd.x, hd.y, hd.z, sd.x*0.1, sd.y*0.1, sd.z*0.1]);
   };
 
-  // ── Face features: 8 values ──────────────────────────────────
-  CameraService.prototype._extractFaceFeatures = function(faceLM, dom, aux) {
-    if (!faceLM || faceLM.length < 468) return [0,0,0, 0,0, 0,0, 0];
+  // ── Face features: 10 values ─────────────────────────────────
+  // [0,1] nose position  [2] face scale  [3,4] dom wrist→nose  [5,6] aux wrist→nose
+  // [7] face tilt  [8] mouth openness  [9] eye openness
+  CameraService.prototype._extractFaceFeatures = function(faceLM, poseLM, dom, aux) {
+    if (!faceLM || faceLM.length < 468) return [0,0,0, 0,0, 0,0, 0, 0,0];
     // Nose tip = landmark 1
     var nose = faceLM[1];
     // Eye distance: left eye outer (33) to right eye outer (263)
     var eyeDist = dist3D(faceLM[33], faceLM[263]);
+    var eyeScale = eyeDist > 0.001 ? eyeDist : 0.1;
     // Face tilt: angle of line from left to right eye
     var dx = faceLM[263].x - faceLM[33].x;
     var dy = faceLM[263].y - faceLM[33].y;
     var tilt = Math.atan2(dy, dx);
 
-    // Hand-to-nose offsets (only if hands detected)
+    // Wrist-to-nose offsets using actual pose wrist landmarks
+    // Pose: 16 = right wrist (dominant), 15 = left wrist (aux)
     var h1nx = 0, h1ny = 0, h2nx = 0, h2ny = 0;
-    if (dom && dom.length >= 2) {
-      // wrist position approximated from hand features — use nose as reference
-      // Use feature[5,6] (hand dir) as proxy for relative position
-      h1nx = clamp(dom[5] - nose.x, -1, 1);
-      h1ny = clamp(dom[6] - nose.y, -1, 1);
-    }
-    if (aux && aux.length >= 2) {
-      h2nx = clamp(aux[5] - nose.x, -1, 1);
-      h2ny = clamp(aux[6] - nose.y, -1, 1);
+    if (poseLM && poseLM.length >= 17) {
+      var rWrist = poseLM[16];
+      var lWrist = poseLM[15];
+      if (dom && rWrist.visibility > 0.1) {
+        h1nx = clamp(rWrist.x - nose.x, -1, 1);
+        h1ny = clamp(rWrist.y - nose.y, -1, 1);
+      }
+      if (aux && lWrist.visibility > 0.1) {
+        h2nx = clamp(lWrist.x - nose.x, -1, 1);
+        h2ny = clamp(lWrist.y - nose.y, -1, 1);
+      }
     }
 
+    // Mouth openness: upper lip center (13) to lower lip center (14)
+    var mouthOpen = clamp(dist3D(faceLM[13], faceLM[14]) / eyeScale, 0, 1);
+
+    // Eye openness: average of left eye (159→145) and right eye (386→374) vertical span
+    var leftEyeH  = dist3D(faceLM[159], faceLM[145]);
+    var rightEyeH = dist3D(faceLM[386], faceLM[374]);
+    var eyeOpen   = clamp((leftEyeH + rightEyeH) / 2 / eyeScale, 0, 1);
+
     return [
-      nose.x, nose.y,           // [0,1] nose position
-      clamp(eyeDist * 5, 0, 1), // [2]   face scale
-      h1nx, h1ny,               // [3,4] hand1 to nose
-      h2nx, h2ny,               // [5,6] hand2 to nose
-      clamp(tilt / Math.PI, -1, 1), // [7] face tilt
+      nose.x, nose.y,                // [0,1] nose position
+      clamp(eyeDist * 5, 0, 1),      // [2]   face scale
+      h1nx, h1ny,                    // [3,4] dom wrist → nose
+      h2nx, h2ny,                    // [5,6] aux wrist → nose
+      clamp(tilt / Math.PI, -1, 1),  // [7]   face tilt
+      mouthOpen,                     // [8]   mouth openness
+      eyeOpen,                       // [9]   eye openness
     ];
   };
 
@@ -377,7 +395,7 @@ var CameraService = (function() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Draw hand connections
-    var handColor = '#5eead4';
+    var handColor = 'rgba(255,255,255,0.75)';
     var connections = [
       [0,1],[1,2],[2,3],[3,4],
       [0,5],[5,6],[6,7],[7,8],
@@ -417,7 +435,7 @@ var CameraService = (function() {
         ctx.beginPath();
         ctx.moveTo(trail[ti - 1].x * canvas.width, trail[ti - 1].y * canvas.height);
         ctx.lineTo(trail[ti].x * canvas.width, trail[ti].y * canvas.height);
-        ctx.strokeStyle = 'rgba(206,79,104,' + (alpha * 0.85) + ')';
+        ctx.strokeStyle = 'rgba(255,255,255,' + (alpha * 0.7) + ')';
         ctx.lineWidth   = 3 * alpha;
         ctx.stroke();
       }
@@ -425,7 +443,7 @@ var CameraService = (function() {
       var last = trail[trail.length - 1];
       ctx.beginPath();
       ctx.arc(last.x * canvas.width, last.y * canvas.height, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#ce4f68';
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
       ctx.fill();
     }
 
@@ -433,7 +451,7 @@ var CameraService = (function() {
     if (results.poseLandmarks) {
       var pose = results.poseLandmarks;
       var poseConns = [[11,12],[11,13],[13,15],[12,14],[14,16]];
-      ctx.strokeStyle = '#a78bfa';
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
       ctx.lineWidth   = 2;
       poseConns.forEach(function(c) {
         var a = pose[c[0]], b = pose[c[1]];
@@ -444,6 +462,53 @@ var CameraService = (function() {
           ctx.stroke();
         }
       });
+    }
+
+    // Draw face tracking: oval contour, eyes, nose, mouth
+    if (results.faceLandmarks && results.faceLandmarks.length >= 468) {
+      var fl = results.faceLandmarks;
+      var fw = canvas.width, fh = canvas.height;
+
+      function drawPolyline(indices, close) {
+        if (indices.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(fl[indices[0]].x * fw, fl[indices[0]].y * fh);
+        for (var pi = 1; pi < indices.length; pi++) {
+          ctx.lineTo(fl[indices[pi]].x * fw, fl[indices[pi]].y * fh);
+        }
+        if (close) ctx.closePath();
+        ctx.stroke();
+      }
+
+      // Face oval
+      ctx.strokeStyle = 'rgba(255,255,255,0.20)';
+      ctx.lineWidth   = 1;
+      drawPolyline([10,338,297,332,284,251,389,356,454,323,361,288,397,365,
+                    379,378,400,377,152,148,176,149,150,136,172,58,132,93,
+                    234,127,162,21,54,103,67,109,10], false);
+
+      // Eyes
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth   = 1.2;
+      drawPolyline([33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7,33], true);
+      drawPolyline([362,398,384,385,386,387,388,466,263,249,390,373,374,380,381,382,362], true);
+
+      // Outer lips
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth   = 1.2;
+      drawPolyline([61,185,40,39,37,0,267,269,270,409,291,375,321,405,314,17,84,181,91,146,61], true);
+
+      // Nose bridge + tip
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth   = 1;
+      drawPolyline([168,6,197,195,5,4,1], false);
+      drawPolyline([98,240,64,235,236,3,237,238,241,125,327], false);
+
+      // Nose tip dot
+      ctx.beginPath();
+      ctx.arc(fl[1].x * fw, fl[1].y * fh, 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fill();
     }
 
     // ── Status text overlay (when no prediction is active) ───

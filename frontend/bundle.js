@@ -1,7 +1,7 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-23T07:09:59.778Z
+// Built: 2026-04-23T17:36:45.060Z
 // MediaPipe Holistic: hands + face + body = 41 features
-// Unified BiLSTM (static + dynamic) + adaptive NLP + Gemini + PWA
+// MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
 'use strict';
 var API = '/api';
@@ -20,7 +20,7 @@ var APP_CONFIG = {
     STATIC_HIDDEN:       [256, 128, 64],
     DYNAMIC_HIDDEN:      [256, 128, 64],
     LEARNING_RATE:       0.008,
-    TRAINING_EPOCHS:     500,   // was 300 — more epochs = better convergence
+    TRAINING_EPOCHS:     500,
     EPOCH_BATCH:         10,
     SAMPLES_PER_GESTURE: 35,
     STATIC_INPUT:        41,
@@ -30,52 +30,51 @@ var APP_CONFIG = {
   },
 
   RECOGNITION: {
-    CONFIDENCE_THRESHOLD:  0.65,
-    // Stability hold — longer = fewer false triggers, more deliberate
-    STABLE_MS_LETTER:      750,   // was 600
-    STABLE_MS_WORD:        1100,  // was 900
-    STABLE_MS_NUMBER:      750,   // was 600
-    // Cooldowns — space out repeated recognitions
-    COOLDOWN_SAME_LETTER:  1600,  // was 1200
-    COOLDOWN_DIFF_LETTER:  550,   // was 400
-    COOLDOWN_WORD:         2200,  // was 1800 — prevents word bursts
-    // Prediction rate limiting
-    PREDICT_EVERY_N:       3,
-    // Confidence smoothing — larger window = smoother, less jittery
-    CONF_SMOOTH_WINDOW:    7,     // was 5
+    CONFIDENCE_THRESHOLD:  0.60,
+    // Stability hold — tuned for responsive demo
+    STABLE_MS_LETTER:      500,
+    STABLE_MS_WORD:        750,
+    STABLE_MS_NUMBER:      500,
+    // Cooldowns — prevent duplicate confirmations
+    COOLDOWN_SAME_LETTER:  1200,
+    COOLDOWN_DIFF_LETTER:  350,
+    COOLDOWN_WORD:         1500,
+    // Prediction rate limiting — every 2 frames for faster response
+    PREDICT_EVERY_N:       2,
+    // Confidence smoothing — 5 frames balances speed + stability
+    CONF_SMOOTH_WINDOW:    5,
     // Motion detection threshold for LSTM activation
-    MOTION_THRESHOLD:      0.08,
-    DYNAMIC_CONF_THRESH:   0.75,
+    MOTION_THRESHOLD:      0.06,
+    DYNAMIC_CONF_THRESH:   0.70,
     DWELL_TIME:            1500,
-    SPELL_PAUSE:           2200,  // was 2000
+    SPELL_PAUSE:           1800,
     // NLP debounce
-    NLP_DEBOUNCE_MS:       400,   // was 300
-    // Ensemble voting — more history = more stable argmax
-    ENSEMBLE_WINDOW:       7,     // was 5
-    // TTS word-queue buffer — accumulate words before speaking (ms)
-    TTS_BUFFER_MS:         1800,
-
-    // Hysteresis — lower exit threshold keeps active gesture alive during brief dips
-    HYSTERESIS_EXIT:          0.45,
-    // Streak gate — require this many consecutive same-gesture frames before hold timer starts
-    MIN_STREAK_FRAMES:        3,
-    // Rejection zone — below this confidence always treat as no gesture
-    MIN_REJECT_CONF:          0.15,
-    // Dynamic priority margin — dynamic model wins if within this fraction of static conf
+    NLP_DEBOUNCE_MS:       300,
+    // Ensemble voting
+    ENSEMBLE_WINDOW:       5,
+    // TTS word-queue buffer
+    TTS_BUFFER_MS:         1500,
+    // Hysteresis — keep active gesture alive during brief dips
+    HYSTERESIS_EXIT:          0.40,
+    // Streak gate — frames before hold timer starts
+    MIN_STREAK_FRAMES:        2,
+    // Rejection zone
+    MIN_REJECT_CONF:          0.12,
+    // Dynamic priority margin
     DYNAMIC_PRIORITY_MARGIN:  0.05,
-    // Prediction trail — number of recent confirmed gestures to show
+    // Prediction trail
     PRED_TRAIL_SIZE:          5,
-    // Adaptive cooldown — factor and window applied after user manually interacts
-    ADAPTIVE_COOLDOWN_FACTOR: 0.65,
+    // Adaptive cooldown
+    ADAPTIVE_COOLDOWN_FACTOR: 0.60,
     ADAPTIVE_COOLDOWN_WINDOW: 3000,
   },
 
   MEDIAPIPE: {
     CDN_BASE:                'https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5.1675471629',
     MODEL_COMPLEXITY:        1,
-    MIN_DETECTION_CONFIDENCE:0.7,
+    MIN_DETECTION_CONFIDENCE:0.6,
     MIN_TRACKING_CONFIDENCE: 0.5,
-    MIRROR_DISPLAY:          true,
+    MIRROR_DISPLAY:          false,
     DOMINANT_HAND:           'Right',
     HAND_LOSS_ABORT_FRAMES:  3,
     SMOOTH_LANDMARKS:        true,
@@ -108,17 +107,17 @@ var APP_CONFIG = {
     RETRAIN_AFTER_SENTENCES:3,
   },
 
-  SEQUENCE: { WINDOW_SIZE:45, MAX_HISTORY:20, DEFAULT_TIMEOUT:3000 },
-
+  // Tabs — Sequences removed (low usage)
   TABS_ADMIN: [
-    { id:'detect',    label:'Detect'    },
-    { id:'train',     label:'Train'     },
-    { id:'sequences', label:'Sequences' },
-    { id:'settings',  label:'Settings'  },
+    { id:'detect',   label:'Detect'   },
+    { id:'train',    label:'Train'    },
+    { id:'settings', label:'Settings' },
   ],
 
-  FINGER_NAMES:  ['Thumb','Index','Middle','Ring','Pinky'],
-  FINGER_COLORS: ['#5eead4','#a78bfa','#fbbf24','#fb7185','#60a5fa'],
+  // Both hands: DOM hand fingers first (0–4), then AUX hand (5–9) → feature indices 0–4, 11–15
+  FINGER_NAMES:  ['T','I','M','R','P', 'T₂','I₂','M₂','R₂','P₂'],
+  FINGER_COLORS: ['#ffffff','#ffffff','#ffffff','#ffffff','#ffffff',
+                  'rgba(255,255,255,0.55)','rgba(255,255,255,0.55)','rgba(255,255,255,0.55)','rgba(255,255,255,0.55)','rgba(255,255,255,0.55)'],
   ADMIN_PIN: '1234',
 };
 
@@ -393,18 +392,30 @@ const LogEntry = (entry, opacity) => {
   `</div>`;
 };
 
-// Five vertical bars showing finger curl 0–100%.
-// IDs fb0–fb4 and fv0–fv4 are updated directly by AppController on each frame.
-const FingerBars = (names, colors) =>
-  `<div class="fgrid">` +
-    names.map(function(name, i) {
-      return `<div class="fcol">` +
-        `<div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:rgba(255,255,255,0.5)"></div></div>` +
-        `<div class="fname" style="color:#ffffff">${name}</div>` +
-        `<div class="fval" id="fv${i}">0%</div>` +
-      `</div>`;
-    }).join('') +
-  `</div>`;
+// Ten vertical bars showing finger curl 0–100% for both hands.
+// IDs fb0–fb9 and fv0–fv9 updated directly by AppController on each frame.
+// Bars 0–4 = dominant hand, 5–9 = auxiliary hand; divided by a thin separator.
+const FingerBars = (names, colors) => {
+  var half = Math.floor(names.length / 2);
+  var cols = names.map(function(name, i) {
+    var color = (colors && colors[i]) ? colors[i] : 'rgba(255,255,255,0.5)';
+    return `<div class="fcol">` +
+      `<div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:${color}"></div></div>` +
+      `<div class="fname" style="color:${color};font-size:9px">${name}</div>` +
+      `<div class="fval" id="fv${i}" style="font-size:8px">0%</div>` +
+    `</div>`;
+  });
+  // Insert visual divider between the two hands
+  if (names.length > 5) {
+    cols.splice(half, 0, '<div class="fgrid-div"></div>');
+  }
+  return `<div style="font-size:8px;color:var(--mx);margin-bottom:4px">` +
+    `<span style="margin-right:4px">Dom hand</span>` +
+    `<span style="opacity:.5">·</span>` +
+    `<span style="margin-left:4px">Aux hand</span>` +
+  `</div>` +
+  `<div class="fgrid">${cols.join('')}</div>`;
+};
 
 
 // ═══ models/NeuralNetwork.js ═══
@@ -830,7 +841,9 @@ class StorageService {
 // ═══ services/CameraService.js ═══
 // services/CameraService.js — Gesture Detection v1.0
 // MediaPipe Holistic: hands + face + body = 41 features
-// [hand1x11] + [hand2x11] + [face x8] + [pose x6] + [flags x3] + [pad x2] = 41
+// [hand1x11] + [hand2x11] + [face x10] + [pose x6] + [flags x3] = 41
+// Face (10): nose_x, nose_y, eye_scale, dom_wrist_dx, dom_wrist_dy,
+//            aux_wrist_dx, aux_wrist_dy, tilt, mouth_open, eye_open
 var CameraService = (function() {
   function CameraService() {
     this.holistic     = null;
@@ -864,10 +877,10 @@ var CameraService = (function() {
     this.videoEl.setAttribute('autoplay', '');
     this.videoEl.setAttribute('playsinline', '');
     this.videoEl.muted = true;
-    this.videoEl.style.cssText = 'width:100%;display:block;transform:scaleX(-1)';
+    this.videoEl.style.cssText = 'width:100%;display:block';
 
     this.canvasEl = document.createElement('canvas');
-    this.canvasEl.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)';
+    this.canvasEl.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%';
   }
 
   CameraService.prototype.initialize = function() {
@@ -922,11 +935,10 @@ var CameraService = (function() {
     });
   };
 
-  // ── Mirror transform (front camera = mirrored, back = normal) ────
+  // ── Mirror transform — no flip so video shows natural orientation ──
   CameraService.prototype._applyMirror = function() {
-    var t = this.facingMode === 'user' ? 'scaleX(-1)' : 'none';
-    this.videoEl.style.transform  = t;
-    this.canvasEl.style.transform = t;
+    this.videoEl.style.transform  = 'none';
+    this.canvasEl.style.transform = 'none';
   };
 
   // ── Switch between front / back camera ───────────────────────
@@ -1073,13 +1085,14 @@ var CameraService = (function() {
       }
     }
 
-    // Face features (8)
-    var faceFeat = this._extractFaceFeatures(faceLM, dom, aux);
+    // Face features (10): nose, scale, wrist→nose offsets, tilt, mouth open, eye open
+    var faceFeat = this._extractFaceFeatures(faceLM, poseLM, dom, aux);
     // Pose features (6)
     var poseFeat = this._extractPoseFeatures(poseLM, dom, aux);
     // Presence flags (3)
     var flags = [domPresent, auxPresent, this.faceDetected ? 1 : 0];
 
+    // 11 + 11 + 10 + 6 + 3 = 41 exactly
     var vec = (dom || ZEROS_11).concat(aux || ZEROS_11)
               .concat(faceFeat)
               .concat(poseFeat)
@@ -1108,37 +1121,53 @@ var CameraService = (function() {
     return curls.concat([hd.x, hd.y, hd.z, sd.x*0.1, sd.y*0.1, sd.z*0.1]);
   };
 
-  // ── Face features: 8 values ──────────────────────────────────
-  CameraService.prototype._extractFaceFeatures = function(faceLM, dom, aux) {
-    if (!faceLM || faceLM.length < 468) return [0,0,0, 0,0, 0,0, 0];
+  // ── Face features: 10 values ─────────────────────────────────
+  // [0,1] nose position  [2] face scale  [3,4] dom wrist→nose  [5,6] aux wrist→nose
+  // [7] face tilt  [8] mouth openness  [9] eye openness
+  CameraService.prototype._extractFaceFeatures = function(faceLM, poseLM, dom, aux) {
+    if (!faceLM || faceLM.length < 468) return [0,0,0, 0,0, 0,0, 0, 0,0];
     // Nose tip = landmark 1
     var nose = faceLM[1];
     // Eye distance: left eye outer (33) to right eye outer (263)
     var eyeDist = dist3D(faceLM[33], faceLM[263]);
+    var eyeScale = eyeDist > 0.001 ? eyeDist : 0.1;
     // Face tilt: angle of line from left to right eye
     var dx = faceLM[263].x - faceLM[33].x;
     var dy = faceLM[263].y - faceLM[33].y;
     var tilt = Math.atan2(dy, dx);
 
-    // Hand-to-nose offsets (only if hands detected)
+    // Wrist-to-nose offsets using actual pose wrist landmarks
+    // Pose: 16 = right wrist (dominant), 15 = left wrist (aux)
     var h1nx = 0, h1ny = 0, h2nx = 0, h2ny = 0;
-    if (dom && dom.length >= 2) {
-      // wrist position approximated from hand features — use nose as reference
-      // Use feature[5,6] (hand dir) as proxy for relative position
-      h1nx = clamp(dom[5] - nose.x, -1, 1);
-      h1ny = clamp(dom[6] - nose.y, -1, 1);
-    }
-    if (aux && aux.length >= 2) {
-      h2nx = clamp(aux[5] - nose.x, -1, 1);
-      h2ny = clamp(aux[6] - nose.y, -1, 1);
+    if (poseLM && poseLM.length >= 17) {
+      var rWrist = poseLM[16];
+      var lWrist = poseLM[15];
+      if (dom && rWrist.visibility > 0.1) {
+        h1nx = clamp(rWrist.x - nose.x, -1, 1);
+        h1ny = clamp(rWrist.y - nose.y, -1, 1);
+      }
+      if (aux && lWrist.visibility > 0.1) {
+        h2nx = clamp(lWrist.x - nose.x, -1, 1);
+        h2ny = clamp(lWrist.y - nose.y, -1, 1);
+      }
     }
 
+    // Mouth openness: upper lip center (13) to lower lip center (14)
+    var mouthOpen = clamp(dist3D(faceLM[13], faceLM[14]) / eyeScale, 0, 1);
+
+    // Eye openness: average of left eye (159→145) and right eye (386→374) vertical span
+    var leftEyeH  = dist3D(faceLM[159], faceLM[145]);
+    var rightEyeH = dist3D(faceLM[386], faceLM[374]);
+    var eyeOpen   = clamp((leftEyeH + rightEyeH) / 2 / eyeScale, 0, 1);
+
     return [
-      nose.x, nose.y,           // [0,1] nose position
-      clamp(eyeDist * 5, 0, 1), // [2]   face scale
-      h1nx, h1ny,               // [3,4] hand1 to nose
-      h2nx, h2ny,               // [5,6] hand2 to nose
-      clamp(tilt / Math.PI, -1, 1), // [7] face tilt
+      nose.x, nose.y,                // [0,1] nose position
+      clamp(eyeDist * 5, 0, 1),      // [2]   face scale
+      h1nx, h1ny,                    // [3,4] dom wrist → nose
+      h2nx, h2ny,                    // [5,6] aux wrist → nose
+      clamp(tilt / Math.PI, -1, 1),  // [7]   face tilt
+      mouthOpen,                     // [8]   mouth openness
+      eyeOpen,                       // [9]   eye openness
     ];
   };
 
@@ -1205,7 +1234,7 @@ var CameraService = (function() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Draw hand connections
-    var handColor = '#5eead4';
+    var handColor = 'rgba(255,255,255,0.75)';
     var connections = [
       [0,1],[1,2],[2,3],[3,4],
       [0,5],[5,6],[6,7],[7,8],
@@ -1245,7 +1274,7 @@ var CameraService = (function() {
         ctx.beginPath();
         ctx.moveTo(trail[ti - 1].x * canvas.width, trail[ti - 1].y * canvas.height);
         ctx.lineTo(trail[ti].x * canvas.width, trail[ti].y * canvas.height);
-        ctx.strokeStyle = 'rgba(206,79,104,' + (alpha * 0.85) + ')';
+        ctx.strokeStyle = 'rgba(255,255,255,' + (alpha * 0.7) + ')';
         ctx.lineWidth   = 3 * alpha;
         ctx.stroke();
       }
@@ -1253,7 +1282,7 @@ var CameraService = (function() {
       var last = trail[trail.length - 1];
       ctx.beginPath();
       ctx.arc(last.x * canvas.width, last.y * canvas.height, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#ce4f68';
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
       ctx.fill();
     }
 
@@ -1261,7 +1290,7 @@ var CameraService = (function() {
     if (results.poseLandmarks) {
       var pose = results.poseLandmarks;
       var poseConns = [[11,12],[11,13],[13,15],[12,14],[14,16]];
-      ctx.strokeStyle = '#a78bfa';
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
       ctx.lineWidth   = 2;
       poseConns.forEach(function(c) {
         var a = pose[c[0]], b = pose[c[1]];
@@ -1272,6 +1301,53 @@ var CameraService = (function() {
           ctx.stroke();
         }
       });
+    }
+
+    // Draw face tracking: oval contour, eyes, nose, mouth
+    if (results.faceLandmarks && results.faceLandmarks.length >= 468) {
+      var fl = results.faceLandmarks;
+      var fw = canvas.width, fh = canvas.height;
+
+      function drawPolyline(indices, close) {
+        if (indices.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(fl[indices[0]].x * fw, fl[indices[0]].y * fh);
+        for (var pi = 1; pi < indices.length; pi++) {
+          ctx.lineTo(fl[indices[pi]].x * fw, fl[indices[pi]].y * fh);
+        }
+        if (close) ctx.closePath();
+        ctx.stroke();
+      }
+
+      // Face oval
+      ctx.strokeStyle = 'rgba(255,255,255,0.20)';
+      ctx.lineWidth   = 1;
+      drawPolyline([10,338,297,332,284,251,389,356,454,323,361,288,397,365,
+                    379,378,400,377,152,148,176,149,150,136,172,58,132,93,
+                    234,127,162,21,54,103,67,109,10], false);
+
+      // Eyes
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth   = 1.2;
+      drawPolyline([33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7,33], true);
+      drawPolyline([362,398,384,385,386,387,388,466,263,249,390,373,374,380,381,382,362], true);
+
+      // Outer lips
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth   = 1.2;
+      drawPolyline([61,185,40,39,37,0,267,269,270,409,291,375,321,405,314,17,84,181,91,146,61], true);
+
+      // Nose bridge + tip
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth   = 1;
+      drawPolyline([168,6,197,195,5,4,1], false);
+      drawPolyline([98,240,64,235,236,3,237,238,241,125,327], false);
+
+      // Nose tip dot
+      ctx.beginPath();
+      ctx.arc(fl[1].x * fw, fl[1].y * fh, 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.fill();
     }
 
     // ── Status text overlay (when no prediction is active) ───
@@ -1821,11 +1897,10 @@ function _renderTabs(state) {
 
 function _renderTabContent(state) {
   switch (state.tab) {
-    case 'detect': return renderDetectTab(state);
-    case 'train': return renderTrainTab(state);
-    case 'sequences': return renderSequenceTab(state);
+    case 'detect':   return renderDetectTab(state);
+    case 'train':    return renderTrainTab(state);
     case 'settings': return renderSettingsTab(state);
-    default: return renderDetectTab(state);
+    default:         return renderDetectTab(state);
   }
 }
 
@@ -2028,15 +2103,10 @@ function _get(obj, key, fallback) {
   return (obj && obj[key] !== undefined && obj[key] !== null) ? obj[key] : fallback;
 }
 
-function qColor(q) {
-  return '#ffffff';
-}
+function qColor(q) { return '#ffffff'; }
+function qLabel(q) { return q >= 0.8 ? 'Good' : q >= 0.5 ? 'Fair' : 'Low'; }
 
-function qLabel(q) {
-  return q >= 0.8 ? 'Good' : q >= 0.5 ? 'Fair' : 'Low';
-}
-
-function pBar(val, max, color) {
+function pBar(val, max) {
   var pct = Math.min(100, Math.round((val / max) * 100));
   return '<div style="height:5px;background:var(--s1);border-radius:3px;overflow:hidden;flex:1;min-width:40px">' +
     '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.5);border-radius:3px;transition:width .4s"></div></div>';
@@ -2046,65 +2116,201 @@ function esc(s) {
   return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-//  Main export
+// ── Main export ───────────────────────────────────────────────────────────────
 
 function renderTrainTab(state) {
-  var trainStats = state.trainStats || {};
-  var meta = window._trainMeta || {};
-  var readiness = window._readiness || {};
-  var histStats = window._histStats || {};
-  var confThresh = (window._confThresh !== undefined && window._confThresh !== null) ? window._confThresh : 0.65;
-  var perGestAcc = window._perGestAcc || { static: {}, dynamic: {} };
-  var section = window._trainSection || 'alphabet';
-  var guided = window._guidedGesture || null;
-  var liveP = window._livePrediction || null;
-  var countdown = window._countdown || 0;
-  var customs = window._customGestures || [];
-  var nlpStats = window._nlpStats || {};
+  var trainStats  = state.trainStats || {};
+  var meta        = window._trainMeta  || {};
+  var readiness   = window._readiness  || {};
+  var histStats   = window._histStats  || {};
+  var confThresh  = (window._confThresh !== undefined && window._confThresh !== null) ? window._confThresh : 0.65;
+  var perGestAcc  = window._perGestAcc || { static: {}, dynamic: {} };
+  var section     = window._trainSection || 'alphabet';
+  var guided      = window._guidedGesture || null;
+  var liveP       = window._livePrediction || null;
+  var countdown   = window._countdown || 0;
+  var customs     = window._customGestures || [];
+  var nlpStats    = window._nlpStats || {};
   var trainSource = window._trainSource || 'camera';
 
   var isTraining = _get(trainStats, 'isTraining', false);
-  var progress = _get(trainStats, 'progress', 0);
-  var sTrained = _get(trainStats, 'staticTrained', false);
-  var dTrained = _get(trainStats, 'dynamicTrained', false);
+  var progress   = _get(trainStats, 'progress', 0);
+  var sTrained   = _get(trainStats, 'staticTrained',  false);
+  var dTrained   = _get(trainStats, 'dynamicTrained', false);
 
   var needsRetrain = _get(histStats, 'needsRetrain', false) && (sTrained || dTrained);
-  var newSince = _get(histStats, 'newSamplesSinceLastTrain', 0);
+  var newSince     = _get(histStats, 'newSamplesSinceLastTrain', 0);
 
   var readyCount = 0;
   var totalCount = 0;
+  var totalSamples = 0;
   var k;
   for (k in readiness) {
     totalCount++;
     if (readiness[k] && readiness[k].ready) readyCount++;
   }
+  for (k in meta) {
+    totalSamples += (_get(meta[k], 'static', 0) + _get(meta[k], 'dynamic', 0));
+  }
 
   var html = _renderCameraStrip(state, liveP, countdown);
-
   html += '<div id="trainStatus" style="display:none;padding:8px 14px;border-radius:8px;margin-bottom:10px;font-size:11px;font-weight:600;text-align:center"></div>';
 
-  if (needsRetrain) {
-    html += _renderRetrainAlert(newSince);
-  }
+  // ── TRAIN PANEL ──────────────────────────────────────────────────────────────
+  html += _renderTrainPanel(trainStats, isTraining, progress, readyCount, totalCount,
+    totalSamples, needsRetrain, newSince, confThresh, perGestAcc, sTrained, dTrained);
 
-  html += _renderModelStats(trainStats);
+  // ── DIVIDER — capture section ─────────────────────────────────────────────
+  html += '<div style="display:flex;align-items:center;gap:10px;margin:16px 0 10px">' +
+    '<div style="font-size:9px;font-weight:700;color:var(--mx);letter-spacing:.14em;white-space:nowrap">CAPTURE SAMPLES</div>' +
+    '<div style="flex:1;height:1px;background:var(--brd)"></div>' +
+    '</div>';
 
-  if (isTraining) {
-    html += _renderTrainingProgress(progress);
-  }
-
-  html += _renderControls(isTraining, confThresh, readyCount, totalCount);
   html += _renderSourceSelector(trainSource);
   html += _renderSectionTabs(section);
 
-  if (section === 'alphabet') html += _renderAlpha(meta, readiness, guided);
-  else if (section === 'numbers') html += _renderNums(meta, readiness);
-  else if (section === 'words') html += _renderWords(meta, readiness, state.gestures, customs);
-  else html += _renderCustom(meta, readiness, customs);
+  if      (section === 'alphabet') html += _renderAlpha(meta, readiness, guided);
+  else if (section === 'numbers')  html += _renderNums(meta, readiness);
+  else if (section === 'words')    html += _renderWords(meta, readiness, state.gestures, customs);
+  else                             html += _renderCustom(meta, readiness, customs);
 
-  html += _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained);
   html += _renderSessionHistory(histStats);
   html += _renderNlpCard(nlpStats);
+
+  return html;
+}
+
+// ── Train panel ───────────────────────────────────────────────────────────────
+// Single, prominent card: sample summary → Train button → progress → results
+
+function _renderTrainPanel(trainStats, isTraining, progress,
+    readyCount, totalCount, totalSamples, needsRetrain, newSince,
+    confThresh, perGestAcc, sTrained, dTrained) {
+
+  var sAcc   = _get(trainStats, 'staticAccuracy',  0);
+  var sValAc = _get(trainStats, 'valAccuracy',      0);
+  var sLoss  = _get(trainStats, 'staticLoss',       1);
+  var sEp    = _get(trainStats, 'staticEpochs',     0);
+  var trained = sTrained || dTrained;
+
+  // ── Sample readiness summary ──
+  var summaryColor = readyCount === totalCount && totalCount > 0
+    ? 'rgba(255,255,255,0.12)'
+    : 'rgba(255,255,255,0.04)';
+
+  var html = '<div class="cd" style="margin-bottom:12px">';
+  html += '<div class="cd-label" style="font-size:11px;font-weight:800;letter-spacing:.12em">TRAIN MODEL</div>';
+
+  // Sample summary row
+  html += '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">';
+  html += '<div style="flex:1;min-width:90px;padding:10px;background:' + summaryColor + ';border:1px solid var(--brd);border-radius:8px;text-align:center">';
+  html += '<div style="font-size:22px;font-weight:800;color:#ffffff">' + totalSamples + '</div>';
+  html += '<div style="font-size:8px;color:var(--mx);letter-spacing:.08em;margin-top:2px">TOTAL SAMPLES</div>';
+  html += '</div>';
+  html += '<div style="flex:1;min-width:90px;padding:10px;background:' + summaryColor + ';border:1px solid var(--brd);border-radius:8px;text-align:center">';
+  html += '<div style="font-size:22px;font-weight:800;color:#ffffff">' + readyCount + '<span style="font-size:14px;color:var(--mx)">/' + totalCount + '</span></div>';
+  html += '<div style="font-size:8px;color:var(--mx);letter-spacing:.08em;margin-top:2px">GESTURES READY</div>';
+  html += '</div>';
+  if (trained) {
+    html += '<div style="flex:1;min-width:90px;padding:10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;text-align:center">';
+    html += '<div style="font-size:22px;font-weight:800;color:#ffffff">' + Math.round(sAcc * 100) + '%</div>';
+    html += '<div style="font-size:8px;color:var(--mx);letter-spacing:.08em;margin-top:2px">ACCURACY</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Retrain alert
+  if (needsRetrain) {
+    html += '<div style="padding:8px 12px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.18);border-radius:7px;margin-bottom:12px;font-size:10px;color:#ffffff">';
+    html += '<strong>' + newSince + ' new samples</strong> added since last training — retrain to include them.';
+    html += '</div>';
+  }
+
+  // Training progress bar (shown during training)
+  if (isTraining) {
+    html += '<div style="margin-bottom:12px">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:5px">';
+    html += '<span style="font-size:9px;color:var(--mx);letter-spacing:.08em">TRAINING IN PROGRESS</span>';
+    html += '<span style="font-size:9px;font-weight:700;color:#ffffff">' + Math.round(progress) + '%</span>';
+    html += '</div>';
+    html += Bar(progress);
+    html += '</div>';
+  }
+
+  // ── Train button (big, full width) ──
+  var btnLabel, btnDisabled;
+  if (isTraining) {
+    btnLabel    = 'Training… ' + Math.round(progress) + '%';
+    btnDisabled = true;
+  } else if (!trained) {
+    btnLabel    = 'Train on ' + totalSamples + ' Samples';
+    btnDisabled = totalSamples === 0;
+  } else if (needsRetrain) {
+    btnLabel    = 'Retrain (' + newSince + ' new samples)';
+    btnDisabled = false;
+  } else {
+    btnLabel    = 'Retrain Model';
+    btnDisabled = totalSamples === 0;
+  }
+
+  html += '<button ' +
+    'style="width:100%;padding:13px;font-size:12px;font-weight:800;font-family:inherit;' +
+    'background:' + (btnDisabled ? 'var(--s2)' : 'rgba(255,255,255,0.1)') + ';' +
+    'color:' + (btnDisabled ? 'var(--dm)' : '#ffffff') + ';' +
+    'border:1px solid ' + (btnDisabled ? 'var(--brd)' : 'rgba(255,255,255,0.35)') + ';' +
+    'border-radius:10px;cursor:' + (btnDisabled ? 'not-allowed' : 'pointer') + ';' +
+    'letter-spacing:.06em;margin-bottom:10px;transition:opacity .15s" ' +
+    (btnDisabled ? 'disabled ' : '') +
+    'onclick="window._app.trainModel()">' +
+    btnLabel +
+    '</button>';
+
+  // Post-training stats (shown only when trained)
+  if (trained && !isTraining) {
+    html += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">';
+    html += '<div style="flex:1;min-width:70px;text-align:center;padding:7px 4px;background:var(--s1);border-radius:7px;border:1px solid var(--brd)">';
+    html += '<div style="font-size:13px;font-weight:700;color:#ffffff">' + (Math.round(sAcc * 100)) + '%</div>';
+    html += '<div style="font-size:7px;color:var(--mx)">Train Acc</div>';
+    html += '</div>';
+    if (sValAc > 0) {
+      html += '<div style="flex:1;min-width:70px;text-align:center;padding:7px 4px;background:var(--s1);border-radius:7px;border:1px solid var(--brd)">';
+      html += '<div style="font-size:13px;font-weight:700;color:#ffffff">' + Math.round(sValAc * 100) + '%</div>';
+      html += '<div style="font-size:7px;color:var(--mx)">Val Acc</div>';
+      html += '</div>';
+    }
+    html += '<div style="flex:1;min-width:70px;text-align:center;padding:7px 4px;background:var(--s1);border-radius:7px;border:1px solid var(--brd)">';
+    html += '<div style="font-size:13px;font-weight:700;color:#ffffff">' + sEp + '</div>';
+    html += '<div style="font-size:7px;color:var(--mx)">Epochs</div>';
+    html += '</div>';
+    html += '<div style="flex:1;min-width:70px;text-align:center;padding:7px 4px;background:var(--s1);border-radius:7px;border:1px solid var(--brd)">';
+    html += '<div style="font-size:13px;font-weight:700;color:#ffffff">' + _get(trainStats, 'staticLoss', 1).toFixed(3) + '</div>';
+    html += '<div style="font-size:7px;color:var(--mx)">Loss</div>';
+    html += '</div>';
+    html += '</div>';
+  }
+
+  // Confidence threshold
+  html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
+    '<span style="font-size:9px;color:var(--mx);white-space:nowrap;letter-spacing:.08em">CONFIDENCE</span>' +
+    '<input type="range" min="0.3" max="0.95" step="0.05" value="' + confThresh + '" ' +
+    'style="flex:1;min-width:80px;accent-color:#ffffff" ' +
+    'oninput="window._app.setConfThreshold(parseFloat(this.value));document.getElementById(\'confLbl\').textContent=Math.round(parseFloat(this.value)*100)+\'%\'">' +
+    '<span id="confLbl" style="font-size:10px;font-weight:700;color:#ffffff;width:32px">' + Math.round(confThresh * 100) + '%</span>' +
+    '</div>';
+
+  // Secondary actions row
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  html += Btn('Delete Model', 'window._app.deleteModel()', 'r', 'sm', isTraining);
+  html += Btn('Export', 'window._app.exportDataset()', 'o', 'sm');
+  html += '<label class="btn btn-o btn-sm" style="cursor:pointer">Import' +
+    '<input type="file" accept=".json" style="display:none" onchange="window._app.importDataset(this.files[0])">' +
+    '</label>';
+  html += '</div>';
+
+  html += '</div>'; // close .cd
+
+  // Per-gesture accuracy (shown below the train card when trained)
+  html += _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained);
 
   return html;
 }
@@ -2174,74 +2380,41 @@ function _renderCameraStrip(state, liveP, countdown) {
     '</div>';
 }
 
-function _renderRetrainAlert(newSince) {
-  return '<div style="padding:10px 14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:10px;flex-wrap:wrap">' +
-    '<div style="flex:1"><strong style="color:#ffffff">' + newSince + ' new samples</strong> since last training — model is outdated.</div>' +
-    Btn('Retrain Now', 'window._app.trainModel()', 'a', 'sm') +
-    '</div>';
-}
+function _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained) {
+  var allAcc = {};
+  var pg;
+  if (perGestAcc.static)  { for (pg in perGestAcc.static)  allAcc[pg] = perGestAcc.static[pg]; }
+  if (perGestAcc.dynamic) { for (pg in perGestAcc.dynamic) allAcc[pg] = perGestAcc.dynamic[pg]; }
 
-function _renderModelStats(trainStats) {
-  var sAcc = _get(trainStats, 'staticAccuracy', 0);
-  var sLoss = _get(trainStats, 'staticLoss', 1);
-  var sEp = _get(trainStats, 'staticEpochs', 0);
-  var sTrained = _get(trainStats, 'staticTrained', false);
-  var dAcc = _get(trainStats, 'dynamicAccuracy', 0);
-  var dLoss = _get(trainStats, 'dynamicLoss', 1);
-  var dEp = _get(trainStats, 'dynamicEpochs', 0);
-  var dTrained = _get(trainStats, 'dynamicTrained', false);
+  var accKeys = Object.keys(allAcc);
+  if (!(sTrained || dTrained) || accKeys.length === 0) return '';
 
-  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
-    '<div class="cd" style="margin-bottom:0">' +
-    '<div class="cd-label">Static MLP ' + (sTrained ? '<span class="bg bg-g" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
-    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
-    StatBox((sAcc * 100).toFixed(1) + '%', 'Acc', 'var(--g)') +
-    StatBox(sLoss.toFixed(3), 'Loss', 'var(--p)') +
-    StatBox(sEp, 'Ep', 'var(--a)') +
-    '</div>' +
-    '</div>' +
-    '<div class="cd" style="margin-bottom:0">' +
-    '<div class="cd-label">LSTM Dynamic ' + (dTrained ? '<span class="bg bg-p" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
-    '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
-    StatBox((dAcc * 100).toFixed(1) + '%', 'Acc', 'var(--g)') +
-    StatBox(dLoss.toFixed(3), 'Loss', 'var(--p)') +
-    StatBox(dEp, 'Ep', 'var(--a)') +
-    '</div>' +
-    '</div>' +
-    '</div>';
-}
+  accKeys.sort(function(a, b) { return allAcc[a] - allAcc[b]; });
 
-function _renderTrainingProgress(progress) {
+  var rows = '';
+  for (var ai = 0; ai < accKeys.length; ai++) {
+    var gn = accKeys[ai];
+    var ga = allAcc[gn];
+    rows += '<div style="padding:6px 8px;background:var(--s1);border-radius:6px;border:1px solid rgba(255,255,255,0.08)">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">' +
+      '<span style="font-size:10px;font-weight:700">' + gn + '</span>' +
+      '<span style="font-size:9px;font-weight:700;color:#ffffff">' + Math.round(ga * 100) + '%</span>' +
+      '</div>' +
+      pBar(Math.round(ga * 100), 100) +
+      '</div>';
+  }
+
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">Training… ' + Math.round(progress) + '%</div>' +
-    Bar(progress) +
-    '</div>';
-}
-
-function _renderControls(isTraining, confThresh, readyCount, totalCount) {
-  return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">Controls</div>' +
-    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' +
-    Btn(isTraining ? 'Training…' : 'Train Models', 'window._app.trainModel()', 'g', '', isTraining) +
-    Btn('Delete Model', 'window._app.deleteModel()', 'r', 'sm', isTraining) +
-    Btn('Export', 'window._app.exportDataset()', 'o', 'sm') +
-    '<label class="btn btn-o btn-sm" style="cursor:pointer">Import' +
-    '<input type="file" accept=".json" style="display:none" onchange="window._app.importDataset(this.files[0])">' +
-    '</label>' +
+    '<div class="cd-label">Per-Gesture Accuracy <span style="font-size:8px;color:var(--dm);font-weight:400">— sorted lowest first</span></div>' +
+    '<div style="font-size:9px;color:var(--dm);margin-bottom:8px">Below 70% = needs more samples for that gesture</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:5px">' +
+    rows +
     '</div>' +
-    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
-    '<span style="font-size:9px;color:var(--mx);white-space:nowrap">CONFIDENCE</span>' +
-    '<input type="range" min="0.3" max="0.95" step="0.05" value="' + confThresh + '" ' +
-    'style="flex:1;min-width:80px;accent-color:#ffffff" ' +
-    'oninput="window._app.setConfThreshold(parseFloat(this.value));document.getElementById(\'confLbl\').textContent=Math.round(parseFloat(this.value)*100)+\'%\'">' +
-    '<span id="confLbl" style="font-size:10px;font-weight:700;color:#ffffff;width:32px">' + Math.round(confThresh * 100) + '%</span>' +
-    '</div>' +
-    '<div style="font-size:9px;color:var(--dm);margin-top:6px">' + readyCount + '/' + totalCount + ' gestures ready · samples in SQLite DB</div>' +
     '</div>';
 }
 
 function _renderSourceSelector(src) {
-  var camActive = src === 'camera';
+  var camActive   = src === 'camera';
   var gloveActive = src === 'glove';
   var camStyle = 'flex:1;padding:7px 0;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' +
     (camActive ? 'rgba(255,255,255,0.4)' : 'var(--brd)') + ';background:' + (camActive ? 'rgba(255,255,255,0.08)' : 'var(--s1)') + ';color:#ffffff';
@@ -2271,44 +2444,11 @@ function _renderSectionTabs(section) {
   return html + '</div>';
 }
 
-function _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained) {
-  var allAcc = {};
-  var pg;
-  if (perGestAcc.static) { for (pg in perGestAcc.static) allAcc[pg] = perGestAcc.static[pg]; }
-  if (perGestAcc.dynamic) { for (pg in perGestAcc.dynamic) allAcc[pg] = perGestAcc.dynamic[pg]; }
-
-  var accKeys = Object.keys(allAcc);
-  if (!(sTrained || dTrained) || accKeys.length === 0) return '';
-
-  accKeys.sort(function (a, b) { return allAcc[a] - allAcc[b]; });
-
-  var rows = '';
-  for (var ai = 0; ai < accKeys.length; ai++) {
-    var gn = accKeys[ai];
-    var ga = allAcc[gn];
-    rows += '<div style="padding:6px 8px;background:var(--s1);border-radius:6px;border:1px solid rgba(255,255,255,0.1)">' +
-      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">' +
-      '<span style="font-size:10px;font-weight:700">' + gn + '</span>' +
-      '<span style="font-size:9px;font-weight:700;color:#ffffff">' + Math.round(ga * 100) + '%</span>' +
-      '</div>' +
-      pBar(Math.round(ga * 100), 100) +
-      '</div>';
-  }
-
-  return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">Per-Gesture Accuracy</div>' +
-    '<div style="font-size:9px;color:var(--dm);margin-bottom:8px">Below 70% = needs more samples</div>' +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:5px">' +
-    rows +
-    '</div>' +
-    '</div>';
-}
-
 function _renderSessionHistory(histStats) {
   var totalCaptures = _get(histStats, 'totalCaptures', 0);
-  var totalTrains = _get(histStats, 'totalTrains', 0);
-  var newSince = _get(histStats, 'newSamplesSinceLastTrain', 0);
-  var lastTrain = _get(histStats, 'lastTrainAt', null);
+  var totalTrains   = _get(histStats, 'totalTrains',   0);
+  var newSince      = _get(histStats, 'newSamplesSinceLastTrain', 0);
+  var lastTrain     = _get(histStats, 'lastTrainAt', null);
 
   return '<div class="cd" style="margin-bottom:12px">' +
     '<div class="cd-label">Session History</div>' +
@@ -2326,7 +2466,7 @@ function _renderSessionHistory(histStats) {
 }
 
 function _renderNlpCard(nlpStats) {
-  var nlpCorpus = (nlpStats.corpus_size !== undefined) ? nlpStats.corpus_size : 0;
+  var nlpCorpus   = (nlpStats.corpus_size !== undefined) ? nlpStats.corpus_size : 0;
   var nlpPersonal = nlpStats.personal_model_active ? true : false;
 
   return '<div class="cd" style="margin-bottom:12px">' +
@@ -2361,7 +2501,7 @@ function _renderAlpha(meta, readiness, guided) {
     '<div class="cd-label">Alphabet A–Z <span class="flex"></span>' +
     Btn('Guided', 'window._app.startGuidedMode(\'alphabet\')', 'p', 'sm') +
     '</div>' +
-    '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">Capture = static · Record = dynamic motion (J, Z) · Delete = remove samples</div>' +
+    '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">Capture = static · Record = dynamic motion (J, Z)</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:5px">';
   for (var i = 0; i < ALPHA.length; i++) {
     var lt = ALPHA[i];
@@ -2382,13 +2522,13 @@ function _renderNums(meta, readiness) {
 }
 
 function _renderWords(meta, readiness, gestures, customs) {
-  var alphaSet = {};
-  var numSet = {};
+  var alphaSet  = {};
+  var numSet    = {};
   var customSet = {};
   var words = [];
   var i;
-  for (i = 0; i < ALPHA.length; i++) alphaSet[ALPHA[i]] = 1;
-  for (i = 0; i < NUMS.length; i++) numSet[NUMS[i]] = 1;
+  for (i = 0; i < ALPHA.length;   i++) alphaSet[ALPHA[i]]   = 1;
+  for (i = 0; i < NUMS.length;    i++) numSet[NUMS[i]]       = 1;
   for (i = 0; i < customs.length; i++) customSet[customs[i]] = 1;
   for (i = 0; i < gestures.length; i++) {
     var g = gestures[i];
@@ -2437,23 +2577,20 @@ function _card(name, meta, readiness, defaultType, isGuided) {
   var r = readiness[name] || { ready: false, needed: 0, type: defaultType };
   var t = r.type || defaultType;
   var isDyn = t === 'dynamic';
-  var src = window._trainSource || 'camera';
+  var src    = window._trainSource || 'camera';
   var camKey = isDyn ? 'dynamic_camera' : 'static_camera';
   var gloveKey = isDyn ? 'dynamic_glove' : 'static_glove';
-  var count = src === 'camera' ? (m[camKey] || 0) : (m[gloveKey] || 0);
-  var total = isDyn ? (m.dynamic || 0) : (m.static || 0);
+  var count  = src === 'camera' ? (m[camKey] || 0) : (m[gloveKey] || 0);
+  var total  = isDyn ? (m.dynamic || 0) : (m.static || 0);
   var target = isDyn ? 5 : 10;
-  var q = isDyn ? (m.dynamic_quality || 0) : (m.static_quality || 0);
-  var ready = r.ready;
+  var q      = isDyn ? (m.dynamic_quality || 0) : (m.static_quality || 0);
+  var ready  = r.ready;
 
-  var bg = 'var(--s1)';
-  var brd = 'var(--brd)';
-
-  return '<div style="padding:8px;background:' + bg + ';border-radius:8px;border:1px solid ' + brd + ';text-align:center">' +
+  return '<div style="padding:8px;background:var(--s1);border-radius:8px;border:1px solid var(--brd);text-align:center">' +
     '<div style="font-size:18px;font-weight:800;margin-bottom:2px">' + name + '</div>' +
     '<span class="bg ' + (isDyn ? 'bg-p' : 'bg-g') + '" style="font-size:7px">' + (isDyn ? 'DYN' : 'STA') + '</span>' +
     '<div style="display:flex;align-items:center;gap:4px;margin:4px 0">' +
-    pBar(count, target, ready ? 'var(--g)' : 'var(--a)') +
+    pBar(count, target) +
     '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + count + '/' + target + (total > count ? ' (' + total + ' tot)' : '') + '</span>' +
     '</div>' +
     (count > 0
@@ -2464,7 +2601,7 @@ function _card(name, meta, readiness, defaultType, isGuided) {
       ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Record</button>'
       : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Capture</button>') +
     (count > 0
-      ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">Delete</button>'
+      ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">Del</button>'
       : '') +
     '</div>' +
     '</div>';
@@ -2473,10 +2610,10 @@ function _card(name, meta, readiness, defaultType, isGuided) {
 function _wideCard(name, meta, readiness, isCustom) {
   var m = meta[name] || { static: 0, dynamic: 0, static_quality: 0, dynamic_quality: 0 };
   var r = readiness[name] || { ready: false, needed: 0, type: 'static' };
-  var isDyn = r.type === 'dynamic';
-  var sc = m.static || 0;
-  var dc = m.dynamic || 0;
-  var ready = r.ready;
+  var isDyn  = r.type === 'dynamic';
+  var sc     = m.static  || 0;
+  var dc     = m.dynamic || 0;
+  var ready  = r.ready;
   var needed = r.needed || 0;
 
   return '<div style="padding:10px 12px;background:var(--s1);border-radius:8px;border:1px solid var(--brd)">' +
@@ -2491,7 +2628,7 @@ function _wideCard(name, meta, readiness, isCustom) {
     '</div>' +
     '<div style="font-size:8px;color:var(--mx);margin-bottom:5px">' + sc + ' static · ' + dc + ' dynamic</div>' +
     '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px">' +
-    pBar(isDyn ? dc : sc, isDyn ? 5 : 10, ready ? 'var(--g)' : 'var(--a)') +
+    pBar(isDyn ? dc : sc, isDyn ? 5 : 10) +
     '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + (ready ? 'Ready' : 'Need ' + needed) + '</span>' +
     '</div>' +
     '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
@@ -2502,88 +2639,6 @@ function _wideCard(name, meta, readiness, isCustom) {
       : '') +
     '</div>' +
     '</div>';
-}
-
-
-// ═══ views/SequenceView.js ═══
-// views/SequenceView.js
-function renderSequenceTab(state) {
-  var gestures = state.gestures;
-  var combos   = state.combos;
-  var seq      = window._comboSeq || [];
-
-  return (
-    _renderIntro() +
-    _renderBuilder(gestures, seq) +
-    _renderSavedCombos(combos)
-  );
-}
-
-function _renderIntro() {
-  return Card(
-    'Gesture Combos',
-    '<div style="font-size:12px;color:var(--mx);line-height:1.7">' +
-      '<strong style="color:#ffffff">Combos</strong> fire when you sign a specific sequence of gestures. ' +
-      'The <strong style="color:#ffffff">dynamic model</strong> handles motion-based gestures like J and Z.' +
-    '</div>'
-  );
-}
-
-function _renderBuilder(gestures, seq) {
-  var gestureButtons = gestures.slice(0, 20).map(function(g) {
-    return '<button class="btn btn-o btn-sm" onclick="' +
-      'window._comboSeq=(window._comboSeq||[]);window._comboSeq.push(\'' + g + '\');window._app.switchTab(\'sequences\')" >' +
-      g +
-    '</button>';
-  }).join('');
-
-  var seqPreview = seq.length
-    ? '<div class="fr g5 mb8" style="padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid rgba(255,255,255,0.12);flex-wrap:wrap">' +
-        '<span style="font-size:10px;color:#ffffff;font-weight:700">SEQ:</span>' +
-        seq.map(function(g, i) {
-          return Badge(g, 'p') + (i < seq.length - 1 ? '<span style="color:var(--dm)">→</span>' : '');
-        }).join('') +
-        '<button class="btn btn-ghost btn-sm" onclick="window._comboSeq=[];window._app.switchTab(\'sequences\')">clear</button>' +
-      '</div>'
-    : '<div style="font-size:10px;color:var(--dm);margin-bottom:8px">Tap gestures above to build a sequence (min 2).</div>';
-
-  var saveBtn = '<button class="btn btn-g" ' +
-    'onclick="if((window._comboSeq||[]).length>=2&&document.getElementById(\'comboAct\').value.trim()){' +
-      'window._app.addCombo(window._comboSeq,document.getElementById(\'comboAct\').value.trim());' +
-      'window._comboSeq=[];document.getElementById(\'comboAct\').value=\'\';window._app.switchTab(\'sequences\')' +
-    '}" ' + (seq.length < 2 ? 'disabled' : '') + '>Save combo</button>';
-
-  return Card(
-    'Create Combo',
-    '<div class="fr g5 mb8" style="flex-wrap:wrap">' + gestureButtons + '</div>' +
-    seqPreview +
-    '<div class="fr g6">' +
-      '<input class="inp f1" id="comboAct" placeholder="Output phrase…">' +
-      saveBtn +
-    '</div>'
-  );
-}
-
-function _renderSavedCombos(combos) {
-  if (!combos || combos.length === 0) {
-    return Card('Saved Combos', '<div style="font-size:10px;color:var(--dm)">No combos yet. Build one above.</div>');
-  }
-
-  var rows = combos.map(function(c) {
-    var arrows = c.sequence.map(function(g, i) {
-      return Badge(g, 'p') + (i < c.sequence.length - 1 ? '<span style="color:var(--dm)">→</span>' : '');
-    }).join('');
-
-    return '<div class="fr mb8" style="padding:10px 14px;background:var(--s2);border-radius:8px;border:1px solid var(--brd)">' +
-      '<div class="f1">' +
-        '<div class="fr g5 mb8" style="flex-wrap:wrap">' + arrows + '</div>' +
-        '<div style="font-size:12px;font-weight:600;color:#ffffff">"' + c.action + '"</div>' +
-      '</div>' +
-      Badge((c.timeout / 1000).toFixed(1) + 's', 'a') +
-    '</div>';
-  }).join('');
-
-  return Card('Saved Combos', rows);
 }
 
 
@@ -2882,14 +2937,13 @@ function _renderUserFingers() {
 //   5. Motion detection: LSTM only activates on movement
 //   6. NLP debounce: wait 300ms before fetching suggestions
 var RecognitionController = (function() {
-  function RecognitionController(staticNN, dynamicNN, sensorModel, sentenceModel, nlpService, ttsService, sequenceCtrl) {
+  function RecognitionController(staticNN, dynamicNN, sensorModel, sentenceModel, nlpService, ttsService) {
     this.sNN        = staticNN;
     this.dNN        = dynamicNN;
     this.sensor     = sensorModel;
     this.sentence   = sentenceModel;
     this.nlp        = nlpService;
     this.tts        = ttsService;
-    this.seqCtrl    = sequenceCtrl;
     this.running    = false;
     this.confThresh = APP_CONFIG.RECOGNITION.CONFIDENCE_THRESHOLD;
     this.log        = [];
@@ -3173,14 +3227,15 @@ var RecognitionController = (function() {
     // ── Update hysteresis state ──
     this._hysteresisGesture = finalName || null;
 
-    // ── Reset everything on empty frame ──
+    // ── On empty frame: reset stability but keep ensemble history for smoothing ──
     if (!finalName) {
       this._stableName        = null;
       this._stableStartTime   = null;
-      this._probHistory       = [];
       this._streakName        = null;
       this._streakCount       = 0;
       this._hysteresisGesture = null;
+      // Decay ensemble history rather than wiping it (prevents jitter on brief occlusions)
+      if (this._probHistory.length > 2) this._probHistory.shift();
       eventBus.emit(Events.GESTURE_PREDICTING, { gesture: null, conf: 0, model: '' });
       return;
     }
@@ -3289,15 +3344,8 @@ var RecognitionController = (function() {
         this.sentence.addWord(this.sentence.getSpelling());
         this.sentence.clearSpelling();
       }
-      var combo = this.seqCtrl.pushGesture(name);
-      if (combo) {
-        this.tts.speak(combo.action);
-        combo.action.split(' ').forEach(function(w) { self.sentence.addWord(w); });
-        eventBus.emit(Events.COMBO_DETECTED, combo);
-      } else {
-        this.sentence.addWordFromGesture(name.toLowerCase(), name);
-        this.tts.speakIfAuto(name);
-      }
+      this.sentence.addWordFromGesture(name.toLowerCase(), name);
+      this.tts.speakIfAuto(name);
       // NLP debounce — wait before fetching
       this._scheduleNLP();
     }
@@ -3508,24 +3556,6 @@ var RecognitionController = (function() {
 
   return RecognitionController;
 })();
-
-
-// ═══ controllers/SequenceController.js ═══
-// controllers/SequenceController.js
-class SequenceController{
-  constructor(){this.combos=new Map();this.history=[];this._loadDefaults()}
-  _loadDefaults(){for(const c of DEFAULT_COMBOS){this.combos.set(c.seq.join('→'),{sequence:c.seq,action:c.action,timeout:c.timeout})}}
-  addCombo(seq,action,timeout=APP_CONFIG.SEQUENCE.DEFAULT_TIMEOUT){const n=seq.join('→');this.combos.set(n,{sequence:seq,action,timeout});eventBus.emit(Events.COMBO_DETECTED,{combo:n})}
-  pushGesture(name){
-    this.history.push({name,time:Date.now()});if(this.history.length>APP_CONFIG.SEQUENCE.MAX_HISTORY)this.history.shift();
-    const now=Date.now();
-    for(const[cn,c]of this.combos){const recent=this.history.filter(g=>now-g.time<c.timeout).map(g=>g.name);
-      let mi=0;for(const g of recent){if(g===c.sequence[mi]){mi++;if(mi===c.sequence.length){this.history=[];return{combo:cn,action:c.action}}}}
-    }
-    return null;
-  }
-  getAllCombos(){return[...this.combos.entries()].map(([n,c])=>({name:n,sequence:c.sequence,action:c.action,timeout:c.timeout}))}
-}
 
 
 // ═══ controllers/TrainingController.js ═══
@@ -3818,6 +3848,7 @@ class TrainingController {
       staticLoss:      this.staticNN.loss,
       staticEpochs:    this.staticNN.epochs,
       staticTrained:   this.staticNN.trained,
+      valAccuracy:     this.staticNN.val_accuracy || 0,
       dynamicAccuracy: this.dynamicNN.accuracy,
       dynamicLoss:     this.dynamicNN.loss,
       dynamicEpochs:   this.dynamicNN.epochs,
@@ -3854,9 +3885,8 @@ class AppController {
     this.nlp    = new NLPService(this.gemini);
     this.tts    = new TTSService();
 
-    this.seqCtrl   = new SequenceController();
     this.recogCtrl = new RecognitionController(this.staticNN, this.dynamicNN,
-                       this.sensorModel, this.sentenceModel, this.nlp, this.tts, this.seqCtrl);
+                       this.sensorModel, this.sentenceModel, this.nlp, this.tts);
     this.trainCtrl = new TrainingController(this.staticNN, this.dynamicNN,
                        this.gestureModel, this.sensorModel);
     this.view      = new AppView(root, this);
@@ -3921,19 +3951,20 @@ class AppController {
     eventBus.on(Events.TRAIN_PROGRESS,     rr);
     eventBus.on(Events.TRAIN_COMPLETE,     rr);
     eventBus.on(Events.SENTENCE_UPDATED,   rr);
-    eventBus.on(Events.COMBO_DETECTED,     rr);
     eventBus.on(Events.SYSTEM_GESTURE,     rr);
     eventBus.on(Events.SPELLING_UPDATED,   rr);
     eventBus.on(Events.RECORDING_DONE,     rr);
     eventBus.on(Events.STATE_UPDATED,      rr);
     eventBus.on(Events.SAMPLES_COLLECTED,  function() { self._refreshTrainMeta(); rr(); });
 
-    // Update finger curl bars directly in DOM (no re-render needed)
+    // Update finger curl bars for BOTH hands — dom (feat 0-4) + aux (feat 11-15)
+    // UI bars: indices 0-4 = dominant hand, 5-9 = auxiliary hand
     eventBus.on(Events.FEATURES_EXTRACTED, function(d) {
       var f = d.features;
-      if (!f || f.length < 5) return;
-      for (var i = 0; i < 5; i++) {
-        var pct = Math.round(f[i] * 100);
+      if (!f || f.length < 16) return;
+      var srcIdx = [0,1,2,3,4, 11,12,13,14,15]; // dom curls then aux curls
+      for (var i = 0; i < 10; i++) {
+        var pct = Math.round(f[srcIdx[i]] * 100);
         // Detect tab — vertical bars
         var fb = document.getElementById('fb' + i);
         var fv = document.getElementById('fv' + i);
@@ -4438,9 +4469,6 @@ class AppController {
     return ok;
   }
 
-  // ── Sequences ─────────────────────────────────────────────────────────────
-  addCombo(seq, action) { this.seqCtrl.addCombo(seq, action); this.view.render(); }
-
   // ── Settings ──────────────────────────────────────────────────────────────
   setTTSEnabled(v)    { this.tts.enabled   = v; this.view.render(); }
   setAutoSpeak(v)     { this.tts.autoSpeak = v; this.view.render(); }
@@ -4522,7 +4550,7 @@ class AppController {
       gestures:        this.gestureModel.gestures,
       sampleCounts:    this.gestureModel.sampleCounts,
       trainStats:      this.trainCtrl.getStats(),
-      combos:          this.seqCtrl.getAllCombos(),
+      combos:          [],
       sensor:          this.sensorModel,
       tts:             {enabled:this.tts.enabled, auto:this.tts.autoSpeak, rate:this.tts.rate},
       confThresh:      this.recogCtrl.confThresh,

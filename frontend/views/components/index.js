@@ -60,15 +60,27 @@ export const LogEntry = (entry, opacity) => {
   `</div>`;
 };
 
-// Five vertical bars showing finger curl 0–100%.
-// IDs fb0–fb4 and fv0–fv4 are updated directly by AppController on each frame.
-export const FingerBars = (names, colors) =>
-  `<div class="fgrid">` +
-    names.map(function(name, i) {
-      return `<div class="fcol">` +
-        `<div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:rgba(255,255,255,0.5)"></div></div>` +
-        `<div class="fname" style="color:#ffffff">${name}</div>` +
-        `<div class="fval" id="fv${i}">0%</div>` +
-      `</div>`;
-    }).join('') +
-  `</div>`;
+// Ten vertical bars showing finger curl 0–100% for both hands.
+// IDs fb0–fb9 and fv0–fv9 updated directly by AppController on each frame.
+// Bars 0–4 = dominant hand, 5–9 = auxiliary hand; divided by a thin separator.
+export const FingerBars = (names, colors) => {
+  var half = Math.floor(names.length / 2);
+  var cols = names.map(function(name, i) {
+    var color = (colors && colors[i]) ? colors[i] : 'rgba(255,255,255,0.5)';
+    return `<div class="fcol">` +
+      `<div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:${color}"></div></div>` +
+      `<div class="fname" style="color:${color};font-size:9px">${name}</div>` +
+      `<div class="fval" id="fv${i}" style="font-size:8px">0%</div>` +
+    `</div>`;
+  });
+  // Insert visual divider between the two hands
+  if (names.length > 5) {
+    cols.splice(half, 0, '<div class="fgrid-div"></div>');
+  }
+  return `<div style="font-size:8px;color:var(--mx);margin-bottom:4px">` +
+    `<span style="margin-right:4px">Dom hand</span>` +
+    `<span style="opacity:.5">·</span>` +
+    `<span style="margin-left:4px">Aux hand</span>` +
+  `</div>` +
+  `<div class="fgrid">${cols.join('')}</div>`;
+};
