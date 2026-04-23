@@ -46,6 +46,20 @@ var APP_CONFIG = {
     ENSEMBLE_WINDOW:       7,     // was 5
     // TTS word-queue buffer — accumulate words before speaking (ms)
     TTS_BUFFER_MS:         1800,
+
+    // Hysteresis — lower exit threshold keeps active gesture alive during brief dips
+    HYSTERESIS_EXIT:          0.45,
+    // Streak gate — require this many consecutive same-gesture frames before hold timer starts
+    MIN_STREAK_FRAMES:        3,
+    // Rejection zone — below this confidence always treat as no gesture
+    MIN_REJECT_CONF:          0.15,
+    // Dynamic priority margin — dynamic model wins if within this fraction of static conf
+    DYNAMIC_PRIORITY_MARGIN:  0.05,
+    // Prediction trail — number of recent confirmed gestures to show
+    PRED_TRAIL_SIZE:          5,
+    // Adaptive cooldown — factor and window applied after user manually interacts
+    ADAPTIVE_COOLDOWN_FACTOR: 0.65,
+    ADAPTIVE_COOLDOWN_WINDOW: 3000,
   },
 
   MEDIAPIPE: {

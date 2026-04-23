@@ -31,11 +31,11 @@ export const Toggle = (on, onclick) =>
   `</div>`;
 
 export const Bar = (pct, color) =>
-  `<div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:${color || 'var(--g)'}"></div></div>`;
+  `<div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:rgba(255,255,255,0.5)"></div></div>`;
 
 export const StatBox = (value, label, color) =>
   `<div class="stat">` +
-    `<div class="stat-v" style="color:${color || 'var(--g)'}">${value}</div>` +
+    `<div class="stat-v" style="color:#ffffff">${value}</div>` +
     `<div class="stat-l">${label}</div>` +
   `</div>`;
 
@@ -47,15 +47,14 @@ export const SettingRow = (label, desc, control) =>
 
 export const LogEntry = (entry, opacity) => {
   opacity = opacity !== undefined ? opacity : 1;
-  var confColor = entry.conf > 0.9 ? 'var(--g)' : entry.conf > 0.7 ? 'var(--a)' : 'var(--r)';
   return `<div class="log-entry" style="opacity:${opacity}">` +
     `<div class="fr g5">` +
-      Badge(entry.gesture, 'g') +
-      (entry.combo ? Badge(entry.combo, 'p') : '') +
+      Badge(entry.gesture, 'd') +
+      (entry.combo ? Badge(entry.combo, 'd') : '') +
       (entry.model ? `<span style="font-size:8px;color:var(--dm)">[${entry.model}]</span>` : '') +
     `</div>` +
     `<div class="fr g5">` +
-      `<span style="font-size:12px;font-weight:700;color:${confColor}">${(entry.conf * 100).toFixed(1)}%</span>` +
+      `<span style="font-size:12px;font-weight:700;color:#ffffff">${(entry.conf * 100).toFixed(1)}%</span>` +
       `<span style="font-size:9px;color:var(--dm)">${entry.time.toLocaleTimeString()}</span>` +
     `</div>` +
   `</div>`;
@@ -67,8 +66,8 @@ export const FingerBars = (names, colors) =>
   `<div class="fgrid">` +
     names.map(function(name, i) {
       return `<div class="fcol">` +
-        `<div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:${colors[i]}"></div></div>` +
-        `<div class="fname" style="color:${colors[i]}">${name}</div>` +
+        `<div class="fbar-w"><div class="fbar-f" id="fb${i}" style="height:0%;background:rgba(255,255,255,0.5)"></div></div>` +
+        `<div class="fname" style="color:#ffffff">${name}</div>` +
         `<div class="fval" id="fv${i}">0%</div>` +
       `</div>`;
     }).join('') +

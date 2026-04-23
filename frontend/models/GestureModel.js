@@ -123,23 +123,6 @@ export class GestureModel {
   startRecording(gestureName) { this.recording = true; this.recordTarget = gestureName; this.frameBuffer = []; }
   stopRecording()              { this.recording = false; this.frameBuffer = []; }
 
-  async generateAllDemo() {
-    var gestureList = [];
-    var seen = {};
-    var i;
-    for (i = 0; i < this.gestures.length; i++) seen[this.gestures[i]] = 1;
-    for (var k in this.templates) if (!seen[k]) { this.gestures.push(k); seen[k] = 1; }
-    gestureList = this.gestures.slice();
-
-    var res = await fetch(API + '/samples/generate_demo', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({gestures: gestureList})
-    });
-    var data = await res.json();
-    await this.loadFromDB();
-    console.log('[GestureModel] demo generated for', Object.keys(data).length, 'gestures');
-  }
-
   getStaticTrainingData() {
     var inputs = [], labels = [], names = [], idx = 0;
     for (var i = 0; i < this.gestures.length; i++) {

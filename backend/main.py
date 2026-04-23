@@ -22,7 +22,7 @@ from database import (
     get_db, init_db, log_session, score_sample_quality,
     simulate_static, simulate_dynamic,
 )
-from ml_models import PyTorchNN, LSTMModel, DEVICE, FEATURE_VERSION
+from ml_models import UnifiedLSTMModel, DEVICE, FEATURE_VERSION
 import nlp as _nlp_module
 from nlp import (
     SentenceState,
@@ -47,15 +47,12 @@ FRONTEND = Path(__file__).parent.parent / "frontend"
 MP_MODEL  = Path(__file__).parent / "hand_landmarker.task"
 
 
-#  Global model instances 
+#  Global model instance — single bidirectional LSTM for all gestures
 
-static_nn   = PyTorchNN("static")
-dynamic_nn  = LSTMModel()
+unified_nn      = UnifiedLSTMModel()
 _conf_threshold = 0.65
 
-
-_static_train_lock  = asyncio.Lock()
-_dynamic_train_lock = asyncio.Lock()
+_train_lock = asyncio.Lock()
 
 sentence_state = SentenceState()
 
@@ -191,11 +188,10 @@ def _mqtt_on_message(client, userdata, msg):
         if not features:
             return
 
-        nn = static_nn if model_type == "static" else dynamic_nn
-        if not nn.trained:
+        if not unified_nn.trained:
             return
 
-        result = nn.predict(features, _conf_threshold)
+        result = unified_nn.predict(features, _conf_threshold)
 
         if _mqtt_loop and not _mqtt_loop.is_closed():
             asyncio.run_coroutine_threadsafe(
@@ -277,7 +273,7 @@ async def lifespan(app):
     start_mqtt_subscriber()
     print(
         f"[Gesture Detection] Ready | device={DEVICE} | "
-        f"conf_threshold={_conf_threshold} | LSTM dynamic model"
+        f"conf_threshold={_conf_threshold} | Unified BiLSTM (static + dynamic)"
     )
     yield
 
@@ -312,7 +308,8 @@ class NNInitRequest(BaseModel):
     hidden_sizes:   list = []
     output_size:    int  = 0
     gestures:       list = []
-    feature_version: str = "6.1"
+    gesture_types:  dict = {}
+    feature_version: str = "1.0"
 
 class NNTrainRequest(BaseModel):
     model_type: str
@@ -335,9 +332,6 @@ class SimulateRequest(BaseModel):
     gesture:     str
     count:       int = 35
     sample_type: str = 'static'
-
-class GenerateDemoRequest(BaseModel):
-    gestures: list
 
 class SentenceRequest(BaseModel):
     action: str
@@ -382,7 +376,7 @@ def health():
         "device":           str(DEVICE),
         "torch":            __import__("torch").__version__,
         "mediapipe_server": _mp_ready,
-        "dynamic_model":    "LSTM",
+        "model_type":       "UnifiedBiLSTM",
     }
 
 @app.websocket("/ws")
@@ -401,61 +395,44 @@ async def ws_endpoint(ws: WebSocket):
 
 @app.post("/api/nn/init")
 def nn_init(req: NNInitRequest):
-    if req.model_type == 'dynamic':
-        dynamic_nn.initialize(req.output_size, req.gestures)
-        dynamic_nn.feature_version = req.feature_version
-    else:
-        static_nn.initialize(req.input_size, req.hidden_sizes, req.output_size)
-        for i, name in enumerate(req.gestures):
-            static_nn.add_gesture(name, i)
-        static_nn.feature_version = req.feature_version
+    unified_nn.initialize(req.output_size, req.gestures, req.gesture_types or {})
+    unified_nn.feature_version = req.feature_version
     return {"ok": True, "model": req.model_type}
 
 @app.post("/api/nn/train")
 async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
-    nn   = static_nn   if req.model_type == 'static' else dynamic_nn
-    lock = _static_train_lock if req.model_type == 'static' else _dynamic_train_lock
-
-    if nn.model is None:
+    if unified_nn.model is None:
         return {"error": "model not initialised — call /api/nn/init first",
                 "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
 
     # run_in_executor keeps the event loop responsive during the blocking PyTorch work
-    async with lock:
+    async with _train_lock:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, nn.train_batch, req.inputs, req.labels, req.epochs, req.lr)
+        await loop.run_in_executor(None, unified_nn.train_batch, req.inputs, req.labels, req.epochs, req.lr)
 
     await push("train_progress", {
         "model":           req.model_type,
-        "accuracy":        nn.accuracy,
-        "val_accuracy":    nn.val_accuracy,
-        "loss":            nn.loss,
-        "epochs":          nn.epochs,
-        "per_gesture_acc": nn.per_gesture_acc,
+        "accuracy":        unified_nn.accuracy,
+        "val_accuracy":    unified_nn.val_accuracy,
+        "loss":            unified_nn.loss,
+        "epochs":          unified_nn.epochs,
+        "per_gesture_acc": unified_nn.per_gesture_acc,
     })
-    log_session("train_batch", detail=f"{req.model_type} acc={nn.accuracy:.3f} val={nn.val_accuracy:.3f}")
+    log_session("train_batch", detail=f"{req.model_type} acc={unified_nn.accuracy:.3f} val={unified_nn.val_accuracy:.3f}")
     return {
-        "accuracy":        nn.accuracy,
-        "val_accuracy":    nn.val_accuracy,
-        "loss":            nn.loss,
-        "epochs":          nn.epochs,
-        "per_gesture_acc": nn.per_gesture_acc,
+        "accuracy":        unified_nn.accuracy,
+        "val_accuracy":    unified_nn.val_accuracy,
+        "loss":            unified_nn.loss,
+        "epochs":          unified_nn.epochs,
+        "per_gesture_acc": unified_nn.per_gesture_acc,
     }
 
 @app.post("/api/nn/predict")
 def nn_predict(req: PredictRequest):
-    nn = static_nn if req.model_type == 'static' else dynamic_nn
-    if not nn.trained:
+    if not unified_nn.trained:
         return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": True}
 
-    expected = getattr(nn, '_input_size', None)
-    if expected and len(req.features) not in (expected, expected * DYNAMIC_FRAMES):
-        return {
-            "idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": True,
-            "error": f"feature_mismatch: expected {expected}, got {len(req.features)}",
-        }
-
-    result = nn.predict(req.features, _conf_threshold)
+    result = unified_nn.predict(req.features, _conf_threshold)
 
     if result["conf"] > 0.3:
         with get_db() as db:
@@ -468,73 +445,56 @@ def nn_predict(req: PredictRequest):
 
 @app.get("/api/nn/status")
 def nn_status():
+    info = {
+        "trained":         unified_nn.trained,
+        "accuracy":        unified_nn.accuracy,
+        "val_accuracy":    unified_nn.val_accuracy,
+        "loss":            unified_nn.loss,
+        "epochs":          unified_nn.epochs,
+        "per_gesture_acc": unified_nn.per_gesture_acc,
+    }
     return {
-        "static": {
-            "trained":          static_nn.trained,
-            "accuracy":         static_nn.accuracy,
-            "val_accuracy":     static_nn.val_accuracy,
-            "loss":             static_nn.loss,
-            "epochs":           static_nn.epochs,
-            "per_gesture_acc":  static_nn.per_gesture_acc,
-        },
-        "dynamic": {
-            "trained":          dynamic_nn.trained,
-            "accuracy":         dynamic_nn.accuracy,
-            "val_accuracy":     dynamic_nn.val_accuracy,
-            "loss":             dynamic_nn.loss,
-            "epochs":           dynamic_nn.epochs,
-            "model_type":       "LSTM",
-            "per_gesture_acc":  dynamic_nn.per_gesture_acc,
-        },
+        "static":  info,
+        "dynamic": {**info, "model_type": "UnifiedBiLSTM"},
     }
 
 @app.post("/api/nn/save/{model_type}")
 async def nn_save(model_type: str, source: str = 'camera'):
-    nn       = static_nn if model_type == 'static' else dynamic_nn
-    model_id = f"{model_type}_{source}"
+    model_id = f"unified_{source}"
     with get_db() as db:
         db.execute(
             "INSERT OR REPLACE INTO models(id,data,source,updated_at) VALUES(?,?,?,?)",
-            (model_id, json.dumps(nn.to_json()), source, time.time()),
+            (model_id, json.dumps(unified_nn.to_json()), source, time.time()),
         )
     await push("model_saved", {"model": model_type, "source": source})
-    log_session("model_saved", detail=f"{model_type}_{source}")
+    log_session("model_saved", detail=f"unified_{source}")
     return {"ok": True, "model_id": model_id}
 
 @app.post("/api/nn/load/{model_type}")
 def nn_load(model_type: str, source: str = 'camera'):
-    model_id = f"{model_type}_{source}"
+    model_id = f"unified_{source}"
     with get_db() as db:
-        row      = db.execute("SELECT data FROM models WHERE id=?", (model_id,)).fetchone()
-        used_id  = model_id
-        if not row:
-            # Fall back to legacy key (saved before source tracking was added)
-            row     = db.execute("SELECT data FROM models WHERE id=?", (model_type,)).fetchone()
-            used_id = model_type
+        row = db.execute("SELECT data FROM models WHERE id=?", (model_id,)).fetchone()
 
     if not row:
-        return {"ok": False, "error": f"no saved model for '{model_id}'"}
-    if used_id != model_id:
-        print(f"[WARN] nn_load: '{model_id}' not found — loaded legacy model '{used_id}'")
+        return {"ok": False, "error": f"no saved unified model for '{model_id}'"}
 
-    nn = static_nn if model_type == 'static' else dynamic_nn
-    nn.from_json(json.loads(row['data']))
-    return {"ok": True, "accuracy": nn.accuracy, "epochs": nn.epochs, "gestures": list(nn.gestures.items())}
+    unified_nn.from_json(json.loads(row['data']))
+    return {"ok": True, "accuracy": unified_nn.accuracy, "epochs": unified_nn.epochs,
+            "gestures": list(unified_nn.gestures.items())}
 
 @app.post("/api/nn/reset/{model_type}")
 async def nn_reset(model_type: str):
-    nn = static_nn if model_type == 'static' else dynamic_nn
-    nn.reset()
+    unified_nn.reset()
     with get_db() as db:
-        db.execute("DELETE FROM models WHERE id=?", (model_type,))
+        db.execute("DELETE FROM models WHERE id LIKE 'unified_%'")
     await push("model_reset", {"model": model_type})
     log_session("model_reset", detail=model_type)
     return {"ok": True}
 
 @app.post("/api/nn/reset_all")
 async def nn_reset_all(_: None = Depends(require_admin)):
-    static_nn.reset()
-    dynamic_nn.reset()
+    unified_nn.reset()
     with get_db() as db:
         db.execute("DELETE FROM models")
     await push("model_reset", {"model": "all"})
@@ -543,7 +503,7 @@ async def nn_reset_all(_: None = Depends(require_admin)):
 
 @app.get("/api/nn/per_gesture_accuracy")
 def per_gesture_accuracy():
-    return {"static": static_nn.per_gesture_acc, "dynamic": dynamic_nn.per_gesture_acc}
+    return {"static": unified_nn.per_gesture_acc, "dynamic": unified_nn.per_gesture_acc}
 
 
 # -- Confidence threshold --
@@ -695,8 +655,7 @@ async def clear_samples(_: None = Depends(require_admin)):
         db.execute("DELETE FROM static_samples")
         db.execute("DELETE FROM dynamic_samples")
         db.execute("DELETE FROM models")
-    static_nn.reset()
-    dynamic_nn.reset()
+    unified_nn.reset()
     await push("samples_cleared", {})
     log_session("samples_cleared_all")
     return {"ok": True}
@@ -744,41 +703,6 @@ def sample_preview(gesture: str):
         "updatedAt":          s_rows[-1]['created_at'] * 1000 if s_rows else (
                                d_rows[-1]['created_at'] * 1000 if d_rows else None),
     }
-
-@app.post("/api/samples/generate_demo")
-async def generate_demo(req: GenerateDemoRequest):
-    result = {}
-    now    = time.time()
-
-    for name in req.gestures:
-        t       = GESTURE_TEMPLATES.get(name, {})
-        static  = [simulate_static(name)[0] for _ in range(35)]
-        dynamic = []
-        if t.get('type') == 'dynamic':
-            dynamic = [s for _ in range(25) if (s := simulate_dynamic(name, DYNAMIC_FRAMES)) is not None]
-
-        with get_db() as db:
-            for s in static:
-                q = score_sample_quality(s)
-                db.execute(
-                    "INSERT INTO static_samples(gesture,sample,quality,created_at) VALUES(?,?,?,?)",
-                    (name, json.dumps(s), q, now),
-                )
-            for d in dynamic:
-                db.execute(
-                    "INSERT INTO dynamic_samples(gesture,frames,quality,created_at) VALUES(?,?,?,?)",
-                    (name, json.dumps(d), 0.7, now),
-                )
-            db.execute(
-                "INSERT OR IGNORE INTO gesture_registry(name,gesture_type,category,created_at,updated_at) VALUES(?,?,?,?,?)",
-                (name, t.get('type', 'static'), 'word', now, now),
-            )
-
-        result[name] = {'static': len(static), 'dynamic': len(dynamic)}
-        await push("demo_progress", {"gesture": name, "done": list(result.keys())})
-
-    return result
-
 
 # -- Gesture registry --
 

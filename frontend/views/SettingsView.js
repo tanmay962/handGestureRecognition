@@ -23,28 +23,28 @@ function renderSettingsTab(state) {
 
 function _renderGeminiCard(apiKey, apiStatus) {
   var isConnected = apiStatus === 'ok';
-  var borderColor = isConnected ? 'rgba(78,203,158,.2)' : 'transparent';
+  var borderColor = isConnected ? 'rgba(255,255,255,.15)' : 'transparent';
   var gemFn = "(async function(){await window._app.connectGemini(document.getElementById('apiKeyInput').value)})()";
 
   return Card(
     'Gemini AI',
     '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
       'Next-word suggestions, grammar correction, sentence completion. ' +
-      'Get a free key at <span style="color:var(--g)">aistudio.google.com</span>.' +
+      'Get a free key at <span style="color:#ffffff">aistudio.google.com</span>.' +
     '</div>' +
     '<div class="fr g6 mb8">' +
       '<input class="inp f1" id="apiKeyInput" type="password" placeholder="Paste API key…" value="' + apiKey + '">' +
       Btn(isConnected ? 'Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
     '</div>' +
-    (isConnected ? '<div style="font-size:10px;color:var(--g)">Gemini is active</div>' : ''),
+    (isConnected ? '<div style="font-size:10px;color:#ffffff">Gemini is active</div>' : ''),
     'border-color:' + borderColor
   );
 }
 
 function _renderMQTTCard(connected, broker, topic) {
   var statusDot = connected
-    ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--g);margin-right:5px"></span>'
-    : '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--dm);margin-right:5px"></span>';
+    ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.8);margin-right:5px"></span>'
+    : '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.2);margin-right:5px"></span>';
 
   return Card(
     'MQTT Publish',
@@ -59,10 +59,10 @@ function _renderMQTTCard(connected, broker, topic) {
         : Btn('Connect', 'window._app.connectMQTT()', 'g', 'sm')
     ) +
     (connected
-      ? '<div style="font-size:9px;color:var(--dm);margin-top:6px">Topic: <span style="color:var(--p)">' + topic + '</span></div>' +
-        '<div style="font-size:10px;color:var(--g);padding:6px 10px;background:var(--gD);border-radius:6px;margin-top:8px">Publishing gestures to broker</div>'
+      ? '<div style="font-size:9px;color:var(--dm);margin-top:6px">Topic: <span style="color:#ffffff">' + topic + '</span></div>' +
+        '<div style="font-size:10px;color:#ffffff;padding:6px 10px;background:rgba(255,255,255,0.04);border-radius:6px;margin-top:8px">Publishing gestures to broker</div>'
       : '<div style="font-size:9px;color:var(--dm);margin-top:8px">' +
-          'Subscribe anywhere: <code style="color:var(--a)">mosquitto_sub -h broker.hivemq.com -t "' + (topic || 'gesture-detection/results/gesture') + '"</code>' +
+          'Subscribe anywhere: <code style="color:#ffffff">mosquitto_sub -h broker.hivemq.com -t "' + (topic || 'gesture-detection/results/gesture') + '"</code>' +
         '</div>')
   );
 }
@@ -88,7 +88,7 @@ function _renderTTSCard(tts) {
       'Speed: ' + tts.rate.toFixed(1) + '×',
       '',
       '<input type="range" min=".5" max="2" step=".1" value="' + tts.rate + '" ' +
-      'oninput="window._app.setTTSRate(parseFloat(this.value))" style="width:100px;accent-color:var(--g)">'
+      'oninput="window._app.setTTSRate(parseFloat(this.value))" style="width:100px;accent-color:#ffffff">'
     )
   );
 }
@@ -100,7 +100,7 @@ function _renderRecognitionCard(confThresh) {
       'Confidence: ' + Math.round(confThresh * 100) + '%',
       'Minimum confidence before a gesture is accepted',
       '<input type="range" min=".3" max=".95" step=".05" value="' + confThresh + '" ' +
-      'oninput="window._app.setConfThreshold(parseFloat(this.value))" style="width:100px;accent-color:var(--g)">'
+      'oninput="window._app.setConfThreshold(parseFloat(this.value))" style="width:100px;accent-color:#ffffff">'
     ) +
     '<div style="font-size:9px;color:var(--dm);margin-top:6px">' +
       'Letter hold 600ms · Word hold 900ms · Same letter cooldown 1.2s' +

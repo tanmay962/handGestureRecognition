@@ -13,9 +13,11 @@ export function renderDetectTab(state) {
 
   return (
     _renderCamera(state, camActive, cameraError, running, trained, inputMode, contextState) +
+    (running ? _renderTop3Histogram() : '') +
     Card('Finger Curl Sensor', FingerBars(APP_CONFIG.FINGER_NAMES, APP_CONFIG.FINGER_COLORS)) +
     _renderSentenceBuilder(state, displayText, spelling, suggestions, wordSuggestions, completion, geminiEnabled) +
     (trained ? _renderQuickTest(gestures) : '') +
+    ((state.predTrail && state.predTrail.length) ? _renderPredTrail(state.predTrail) : '') +
     (log.length ? _renderLog(log) : '')
   );
 }
@@ -32,7 +34,7 @@ function _renderCamera(state, camActive, cameraError, running, trained, inputMod
     '</div>' +
 
     '<div style="height:3px;background:var(--s2);position:relative;margin-bottom:10px">' +
-      '<div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div>' +
+      '<div id="sysGestProg" style="height:100%;width:0%;background:rgba(255,255,255,0.5);transition:width .1s"></div>' +
     '</div>' +
 
     '<div class="fr fr-center mb8" style="gap:8px;flex-wrap:wrap">' +
@@ -50,7 +52,7 @@ function _renderCamera(state, camActive, cameraError, running, trained, inputMod
       '</select>' +
     '</div>' +
 
-    (cameraError ? '<div style="font-size:11px;color:var(--r);padding:8px 12px;background:var(--rD);border-radius:6px;border:1px solid var(--r);margin-bottom:8px">' + cameraError + '</div>' : '');
+    (cameraError ? '<div style="font-size:11px;color:#ffffff;padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid rgba(255,255,255,0.2);margin-bottom:8px">' + cameraError + '</div>' : '');
 
   var statusBadge = running || camActive
     ? DotBadge('Active', 'g', running || camActive)
@@ -76,7 +78,7 @@ function _renderSentenceBuilder(state, displayText, spelling, suggestions, wordS
       '<span class="cursor"></span>' +
     '</div>' +
 
-    (spelling ? '<div style="font-size:11px;color:var(--p);margin-bottom:8px">Spelling: <strong>' + spelling.toUpperCase() + '_</strong></div>' : '') +
+    (spelling ? '<div style="font-size:11px;color:#ffffff;margin-bottom:8px">Spelling: <strong>' + spelling.toUpperCase() + '_</strong></div>' : '') +
 
     (wordSuggestions.length
       ? '<div class="mb8"><div style="font-size:10px;color:var(--mx);margin-bottom:5px">Word matches</div>' +
@@ -142,5 +144,41 @@ function _renderLog(log) {
         return LogEntry(entry, 1 - i * 0.05);
       }).join('') +
     '</div>'
+  );
+}
+
+function _renderTop3Histogram() {
+  var rows = '';
+  for (var i = 0; i < 3; i++) {
+    rows +=
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+      '<span id="top3n' + i + '" style="font-size:10px;font-weight:700;width:40px;font-family:var(--mono);color:#ffffff;white-space:nowrap;overflow:hidden"></span>' +
+      '<div style="flex:1;height:5px;background:var(--s2);border-radius:3px;overflow:hidden">' +
+        '<div id="top3b' + i + '" style="height:100%;width:0%;background:rgba(255,255,255,0.5);border-radius:3px;transition:width 0.15s"></div>' +
+      '</div>' +
+      '<span id="top3p' + i + '" style="font-size:9px;color:var(--mx);width:28px;text-align:right;font-family:var(--mono)"></span>' +
+      '</div>';
+  }
+  return Card(
+    'Top Predictions',
+    '<div style="font-size:8px;color:var(--dm);margin-bottom:6px">Live confidence from ensemble — updates every frame</div>' +
+    rows
+  );
+}
+
+function _renderPredTrail(trail) {
+  var items = trail.map(function(p) {
+    return '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;' +
+      'background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);' +
+      'border-radius:4px;font-size:10px;font-family:var(--mono);font-weight:700;color:#ffffff">' +
+      p.name +
+      '<span style="font-size:8px;opacity:0.6">' + Math.round(p.conf * 100) + '%</span>' +
+      '</span>';
+  }).join('<span style="color:var(--dm);margin:0 2px;font-size:10px">→</span>');
+
+  return Card(
+    'Prediction Trail',
+    '<div style="font-size:8px;color:var(--dm);margin-bottom:6px">Last ' + trail.length + ' confirmed gestures in order</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">' + items + '</div>'
   );
 }

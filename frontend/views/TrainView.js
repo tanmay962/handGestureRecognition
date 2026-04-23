@@ -15,25 +15,24 @@ function _get(obj, key, fallback) {
 }
 
 function qColor(q) {
-  return q >= 0.8 ? 'var(--g)' : q >= 0.5 ? 'var(--a)' : 'var(--r)';
+  return '#ffffff';
 }
 
 function qLabel(q) {
-  return q >= 0.8 ? '★ Good' : q >= 0.5 ? '◐ Fair' : '▲ Low';
+  return q >= 0.8 ? 'Good' : q >= 0.5 ? 'Fair' : 'Low';
 }
 
 function pBar(val, max, color) {
-  color = color || 'var(--g)';
   var pct = Math.min(100, Math.round((val / max) * 100));
   return '<div style="height:5px;background:var(--s1);border-radius:3px;overflow:hidden;flex:1;min-width:40px">' +
-    '<div style="width:' + pct + '%;height:100%;background:' + color + ';border-radius:3px;transition:width .4s"></div></div>';
+    '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.5);border-radius:3px;transition:width .4s"></div></div>';
 }
 
 function esc(s) {
   return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-//  Main export 
+//  Main export
 
 export function renderTrainTab(state) {
   var trainStats = state.trainStats || {};
@@ -103,8 +102,8 @@ function _renderCameraStrip(state, liveP, countdown) {
   for (var fi = 0; fi < APP_CONFIG.FINGER_NAMES.length; fi++) {
     fingerBars +=
       '<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">' +
-      '<span style="font-size:8px;width:36px;color:' + APP_CONFIG.FINGER_COLORS[fi] + ';font-weight:600">' + APP_CONFIG.FINGER_NAMES[fi] + '</span>' +
-      '<div class="bar-wrap"><div class="bar-fill" id="trainFb' + fi + '" style="width:0%;background:' + APP_CONFIG.FINGER_COLORS[fi] + '"></div></div>' +
+      '<span style="font-size:8px;width:36px;color:#ffffff;font-weight:600">' + APP_CONFIG.FINGER_NAMES[fi] + '</span>' +
+      '<div class="bar-wrap"><div class="bar-fill" id="trainFb' + fi + '" style="width:0%;background:rgba(255,255,255,0.5)"></div></div>' +
       '<span style="font-size:8px;width:26px;text-align:right" id="trainFv' + fi + '">0%</span>' +
       '</div>';
   }
@@ -115,7 +114,7 @@ function _renderCameraStrip(state, liveP, countdown) {
       '<div class="live-pred-box">' +
       '<div style="font-size:8px;color:var(--mx);letter-spacing:.08em;margin-bottom:2px">LIVE PREDICTION</div>' +
       '<div style="display:flex;align-items:center;gap:6px">' +
-      '<span style="font-size:18px;font-weight:800;color:var(--g)">' + liveP.name + '</span>' +
+      '<span style="font-size:18px;font-weight:800;color:#ffffff">' + liveP.name + '</span>' +
       '<span style="font-size:10px;color:var(--mx)">' + Math.round(liveP.conf * 100) + '%</span>' +
       '<span style="font-size:8px;color:var(--dm)">[' + (liveP.model || '') + ']</span>' +
       '</div>' +
@@ -123,7 +122,7 @@ function _renderCameraStrip(state, liveP, countdown) {
   } else {
     livePredHTML =
       '<div style="font-size:8px;color:var(--dm);margin-top:4px">' +
-      (state.camActive ? '✓ Camera active' : '⏳ Waiting…') +
+      (state.camActive ? 'Camera active' : 'Waiting…') +
       ((state.staticTrained || state.dynamicTrained) ? ' · live prediction ON' : ' · train model to enable') +
       '</div>';
   }
@@ -137,7 +136,7 @@ function _renderCameraStrip(state, liveP, countdown) {
     '<div style="position:relative;width:180px;min-height:130px;border-radius:8px;overflow:hidden;background:var(--s1);border:1px solid ' + (state.recording ? 'var(--r)' : 'var(--brd)') + ';flex-shrink:0">' +
     '<div id="trainVidContainer" style="width:100%;height:100%;min-height:130px"></div>' +
     (!state.camActive
-      ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:22px">📷</div><div style="font-size:8px">Loading…</div></div>'
+      ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:8px">Loading…</div></div>'
       : '') +
     (state.recording
       ? '<div style="position:absolute;top:5px;right:5px"><span class="bg bg-r" style="font-size:8px"><span class="dot dot-r dot-pulse"></span>REC</span></div>'
@@ -146,7 +145,7 @@ function _renderCameraStrip(state, liveP, countdown) {
       ? '<div class="countdown-overlay"><div class="countdown-num">' + countdown + '</div></div>'
       : '') +
     '<div style="position:absolute;bottom:0;left:0;right:0;display:flex;gap:3px;padding:3px">' +
-    '<span id="trainFpsB" style="font-size:7px;background:rgba(0,0,0,.7);color:var(--g);padding:2px 5px;border-radius:4px;font-weight:700">-- FPS</span>' +
+    '<span id="trainFpsB" style="font-size:7px;background:rgba(0,0,0,.7);color:#ffffff;padding:2px 5px;border-radius:4px;font-weight:700">-- FPS</span>' +
     '<span id="trainHandB" style="font-size:7px;background:rgba(0,0,0,.7);color:var(--mx);padding:2px 5px;border-radius:4px;font-weight:700">No Hand</span>' +
     '</div>' +
     '</div>' +
@@ -162,9 +161,8 @@ function _renderCameraStrip(state, liveP, countdown) {
 }
 
 function _renderRetrainAlert(newSince) {
-  return '<div style="padding:10px 14px;background:var(--aD);border:1px solid var(--a);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:10px;flex-wrap:wrap">' +
-    '<span style="font-size:16px">⚠️</span>' +
-    '<div style="flex:1"><strong style="color:var(--a)">' + newSince + ' new samples</strong> since last training — model is outdated.</div>' +
+  return '<div style="padding:10px 14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:10px;font-size:10px;flex-wrap:wrap">' +
+    '<div style="flex:1"><strong style="color:#ffffff">' + newSince + ' new samples</strong> since last training — model is outdated.</div>' +
     Btn('Retrain Now', 'window._app.trainModel()', 'a', 'sm') +
     '</div>';
 }
@@ -181,7 +179,7 @@ function _renderModelStats(trainStats) {
 
   return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">' +
     '<div class="cd" style="margin-bottom:0">' +
-    '<div class="cd-label">🧠 Static MLP ' + (sTrained ? '<span class="bg bg-g" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
+    '<div class="cd-label">Static MLP ' + (sTrained ? '<span class="bg bg-g" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
     StatBox((sAcc * 100).toFixed(1) + '%', 'Acc', 'var(--g)') +
     StatBox(sLoss.toFixed(3), 'Loss', 'var(--p)') +
@@ -189,7 +187,7 @@ function _renderModelStats(trainStats) {
     '</div>' +
     '</div>' +
     '<div class="cd" style="margin-bottom:0">' +
-    '<div class="cd-label">🔄 LSTM Dyn ' + (dTrained ? '<span class="bg bg-p" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
+    '<div class="cd-label">LSTM Dynamic ' + (dTrained ? '<span class="bg bg-p" style="font-size:8px">Trained</span>' : '<span class="bg bg-d" style="font-size:8px">Untrained</span>') + '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
     StatBox((dAcc * 100).toFixed(1) + '%', 'Acc', 'var(--g)') +
     StatBox(dLoss.toFixed(3), 'Loss', 'var(--p)') +
@@ -201,29 +199,28 @@ function _renderModelStats(trainStats) {
 
 function _renderTrainingProgress(progress) {
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">⚡ Training… ' + Math.round(progress) + '%</div>' +
+    '<div class="cd-label">Training… ' + Math.round(progress) + '%</div>' +
     Bar(progress) +
     '</div>';
 }
 
 function _renderControls(isTraining, confThresh, readyCount, totalCount) {
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">⚙ Controls</div>' +
+    '<div class="cd-label">Controls</div>' +
     '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' +
-    Btn('📦 Demo Data', 'window._app.generateDemoData()', 'a', 'sm') +
-    Btn(isTraining ? '⏳ Training…' : '🚀 Train Models', 'window._app.trainModel()', 'g', '', isTraining) +
-    Btn('🗑 Delete Model', 'window._app.deleteModel()', 'r', 'sm', isTraining) +
-    Btn('📤 Export', 'window._app.exportDataset()', 'o', 'sm') +
-    '<label class="btn btn-o btn-sm" style="cursor:pointer">📥 Import' +
+    Btn(isTraining ? 'Training…' : 'Train Models', 'window._app.trainModel()', 'g', '', isTraining) +
+    Btn('Delete Model', 'window._app.deleteModel()', 'r', 'sm', isTraining) +
+    Btn('Export', 'window._app.exportDataset()', 'o', 'sm') +
+    '<label class="btn btn-o btn-sm" style="cursor:pointer">Import' +
     '<input type="file" accept=".json" style="display:none" onchange="window._app.importDataset(this.files[0])">' +
     '</label>' +
     '</div>' +
     '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
     '<span style="font-size:9px;color:var(--mx);white-space:nowrap">CONFIDENCE</span>' +
     '<input type="range" min="0.3" max="0.95" step="0.05" value="' + confThresh + '" ' +
-    'style="flex:1;min-width:80px;accent-color:var(--g)" ' +
+    'style="flex:1;min-width:80px;accent-color:#ffffff" ' +
     'oninput="window._app.setConfThreshold(parseFloat(this.value));document.getElementById(\'confLbl\').textContent=Math.round(parseFloat(this.value)*100)+\'%\'">' +
-    '<span id="confLbl" style="font-size:10px;font-weight:700;color:var(--g);width:32px">' + Math.round(confThresh * 100) + '%</span>' +
+    '<span id="confLbl" style="font-size:10px;font-weight:700;color:#ffffff;width:32px">' + Math.round(confThresh * 100) + '%</span>' +
     '</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-top:6px">' + readyCount + '/' + totalCount + ' gestures ready · samples in SQLite DB</div>' +
     '</div>';
@@ -233,15 +230,15 @@ function _renderSourceSelector(src) {
   var camActive = src === 'camera';
   var gloveActive = src === 'glove';
   var camStyle = 'flex:1;padding:7px 0;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' +
-    (camActive ? 'var(--g)' : 'var(--brd)') + ';background:' + (camActive ? 'var(--gD)' : 'var(--s1)') + ';color:' + (camActive ? 'var(--g)' : 'var(--mx)');
+    (camActive ? 'rgba(255,255,255,0.4)' : 'var(--brd)') + ';background:' + (camActive ? 'rgba(255,255,255,0.08)' : 'var(--s1)') + ';color:#ffffff';
   var gloveStyle = 'flex:1;padding:7px 0;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;border:1px solid ' +
-    (gloveActive ? 'var(--p)' : 'var(--brd)') + ';background:' + (gloveActive ? 'var(--pD)' : 'var(--s1)') + ';color:' + (gloveActive ? 'var(--p)' : 'var(--mx)');
+    (gloveActive ? 'rgba(255,255,255,0.4)' : 'var(--brd)') + ';background:' + (gloveActive ? 'rgba(255,255,255,0.08)' : 'var(--s1)') + ';color:#ffffff';
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">📡 Data Source</div>' +
+    '<div class="cd-label">Data Source</div>' +
     '<div style="display:flex;gap:8px">' +
-    '<button style="' + camStyle + '" onclick="window._app.setTrainSource(\'camera\')">📷 Camera</button>' +
-    '<button style="' + gloveStyle + '" onclick="window._app.setTrainSource(\'glove\')">🧤 Glove / MQTT</button>' +
+    '<button style="' + camStyle + '" onclick="window._app.setTrainSource(\'camera\')">Camera</button>' +
+    '<button style="' + gloveStyle + '" onclick="window._app.setTrainSource(\'glove\')">Glove / MQTT</button>' +
     '</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-top:6px">' +
     (camActive ? 'Recording from webcam landmarks' : 'Recording from sensor glove via MQTT') +
@@ -251,7 +248,7 @@ function _renderSourceSelector(src) {
 
 function _renderSectionTabs(section) {
   var tabs = ['alphabet', 'numbers', 'words', 'custom'];
-  var tabLabels = { alphabet: '🔤 A–Z', numbers: '🔢 0–9', words: '💬 Words', custom: '✏️ Custom' };
+  var tabLabels = { alphabet: 'A–Z', numbers: '0–9', words: 'Words', custom: 'Custom' };
   var html = '<div class="section-tabs">';
   for (var ti = 0; ti < tabs.length; ti++) {
     var s = tabs[ti];
@@ -275,18 +272,17 @@ function _renderPerGestureAccuracy(perGestAcc, sTrained, dTrained) {
   for (var ai = 0; ai < accKeys.length; ai++) {
     var gn = accKeys[ai];
     var ga = allAcc[gn];
-    var gc = ga < 0.7 ? 'var(--r)' : ga < 0.85 ? 'var(--a)' : 'var(--g)';
-    rows += '<div style="padding:6px 8px;background:var(--s1);border-radius:6px;border:1px solid ' + gc + '40">' +
+    rows += '<div style="padding:6px 8px;background:var(--s1);border-radius:6px;border:1px solid rgba(255,255,255,0.1)">' +
       '<div style="display:flex;justify-content:space-between;margin-bottom:3px">' +
       '<span style="font-size:10px;font-weight:700">' + gn + '</span>' +
-      '<span style="font-size:9px;font-weight:700;color:' + gc + '">' + Math.round(ga * 100) + '%</span>' +
+      '<span style="font-size:9px;font-weight:700;color:#ffffff">' + Math.round(ga * 100) + '%</span>' +
       '</div>' +
-      pBar(Math.round(ga * 100), 100, gc) +
+      pBar(Math.round(ga * 100), 100) +
       '</div>';
   }
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">📊 Per-Gesture Accuracy</div>' +
+    '<div class="cd-label">Per-Gesture Accuracy</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-bottom:8px">Below 70% = needs more samples</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:5px">' +
     rows +
@@ -301,11 +297,11 @@ function _renderSessionHistory(histStats) {
   var lastTrain = _get(histStats, 'lastTrainAt', null);
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🕐 Session History</div>' +
+    '<div class="cd-label">Session History</div>' +
     '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px">' +
-    '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--g)">' + totalCaptures + '</div><div style="font-size:8px;color:var(--mx)">Captures</div></div>' +
-    '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--p)">' + totalTrains + '</div><div style="font-size:8px;color:var(--mx)">Trains</div></div>' +
-    '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:var(--a)">' + newSince + '</div><div style="font-size:8px;color:var(--mx)">New Since</div></div>' +
+    '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#ffffff">' + totalCaptures + '</div><div style="font-size:8px;color:var(--mx)">Captures</div></div>' +
+    '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#ffffff">' + totalTrains + '</div><div style="font-size:8px;color:var(--mx)">Trains</div></div>' +
+    '<div style="text-align:center"><div style="font-size:20px;font-weight:700;color:#ffffff">' + newSince + '</div><div style="font-size:8px;color:var(--mx)">New Since</div></div>' +
     (lastTrain
       ? '<div style="text-align:center"><div style="font-size:10px;font-weight:600;color:var(--tx)">' + new Date(lastTrain).toLocaleDateString() + '</div><div style="font-size:8px;color:var(--mx)">Last Trained</div></div>'
       : '') +
@@ -320,7 +316,7 @@ function _renderNlpCard(nlpStats) {
   var nlpPersonal = nlpStats.personal_model_active ? true : false;
 
   return '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🧠 Adaptive NLP ' +
+    '<div class="cd-label">Adaptive NLP ' +
     (nlpPersonal
       ? '<span class="bg bg-g" style="font-size:8px">Personal Model Active</span>'
       : '<span class="bg bg-d" style="font-size:8px">Building…</span>') +
@@ -328,15 +324,15 @@ function _renderNlpCard(nlpStats) {
     '<div style="font-size:9px;color:var(--mx);margin-bottom:8px">NLP learns from your signing history and personalises word suggestions over time.</div>' +
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px">' +
     '<div style="text-align:center;padding:8px;background:var(--s1);border-radius:8px">' +
-    '<div style="font-size:18px;font-weight:700;color:var(--p)">' + nlpCorpus + '</div>' +
+    '<div style="font-size:18px;font-weight:700;color:#ffffff">' + nlpCorpus + '</div>' +
     '<div style="font-size:8px;color:var(--mx)">Sentences Learned</div>' +
     '</div>' +
     '<div style="text-align:center;padding:8px;background:var(--s1);border-radius:8px">' +
-    '<div style="font-size:18px;font-weight:700;color:' + (nlpPersonal ? 'var(--g)' : 'var(--dm)') + '">' + (nlpPersonal ? '✓' : '✗') + '</div>' +
+    '<div style="font-size:18px;font-weight:700;color:#ffffff">' + (nlpPersonal ? 'On' : 'Off') + '</div>' +
     '<div style="font-size:8px;color:var(--mx)">Personal Model</div>' +
     '</div>' +
     '<div style="text-align:center;padding:8px;background:var(--s1);border-radius:8px">' +
-    '<div style="font-size:18px;font-weight:700;color:var(--a)">' + (nlpCorpus >= 5 ? '✓' : nlpCorpus + '/5') + '</div>' +
+    '<div style="font-size:18px;font-weight:700;color:#ffffff">' + (nlpCorpus >= 5 ? 'Ready' : nlpCorpus + '/5') + '</div>' +
     '<div style="font-size:8px;color:var(--mx)">Min 5 to Activate</div>' +
     '</div>' +
     '</div>' +
@@ -348,10 +344,10 @@ function _renderNlpCard(nlpStats) {
 
 function _renderAlpha(meta, readiness, guided) {
   var html = '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🔤 Alphabet A–Z <span class="flex"></span>' +
-    Btn('🎯 Guided', 'window._app.startGuidedMode(\'alphabet\')', 'p', 'sm') +
+    '<div class="cd-label">Alphabet A–Z <span class="flex"></span>' +
+    Btn('Guided', 'window._app.startGuidedMode(\'alphabet\')', 'p', 'sm') +
     '</div>' +
-    '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">📸 = static · 🎬 = dynamic motion (J, Z) · 🗑 = delete samples</div>' +
+    '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">Capture = static · Record = dynamic motion (J, Z) · Delete = remove samples</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:5px">';
   for (var i = 0; i < ALPHA.length; i++) {
     var lt = ALPHA[i];
@@ -362,7 +358,7 @@ function _renderAlpha(meta, readiness, guided) {
 
 function _renderNums(meta, readiness) {
   var html = '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">🔢 Numbers 0–9</div>' +
+    '<div class="cd-label">Numbers 0–9</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">All digits are static hand poses.</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:5px">';
   for (var i = 0; i < NUMS.length; i++) {
@@ -385,9 +381,9 @@ function _renderWords(meta, readiness, gestures, customs) {
     if (!alphaSet[g] && !numSet[g] && !customSet[g]) words.push(g);
   }
 
-  var html = '<div class="cd" style="margin-bottom:12px"><div class="cd-label">💬 Word Gestures</div>';
+  var html = '<div class="cd" style="margin-bottom:12px"><div class="cd-label">Word Gestures</div>';
   if (words.length === 0) {
-    html += '<div style="font-size:10px;color:var(--dm);padding:10px 0">No word gestures. Generate demo data to add some.</div>';
+    html += '<div style="font-size:10px;color:var(--dm);padding:10px 0">No word gestures yet.</div>';
   } else {
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px">';
     for (i = 0; i < words.length; i++) html += _wideCard(words[i], meta, readiness, false);
@@ -398,7 +394,7 @@ function _renderWords(meta, readiness, gestures, customs) {
 
 function _renderCustom(meta, readiness, customs) {
   var html = '<div class="cd" style="margin-bottom:12px">' +
-    '<div class="cd-label">✏️ Custom Gestures</div>' +
+    '<div class="cd-label">Custom Gestures</div>' +
     '<div style="font-size:9px;color:var(--dm);margin-bottom:10px">Add your own static pose or dynamic motion gesture.</div>' +
     '<div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">' +
     '<input class="inp" id="newGInput" placeholder="Gesture name…" style="flex:1;min-width:100px" ' +
@@ -436,8 +432,8 @@ function _card(name, meta, readiness, defaultType, isGuided) {
   var q = isDyn ? (m.dynamic_quality || 0) : (m.static_quality || 0);
   var ready = r.ready;
 
-  var bg = isGuided ? 'var(--pD)' : ready ? 'var(--gD)' : 'var(--s1)';
-  var brd = isGuided ? 'var(--p)' : ready ? 'var(--g)' : 'var(--brd)';
+  var bg = 'var(--s1)';
+  var brd = 'var(--brd)';
 
   return '<div style="padding:8px;background:' + bg + ';border-radius:8px;border:1px solid ' + brd + ';text-align:center">' +
     '<div style="font-size:18px;font-weight:800;margin-bottom:2px">' + name + '</div>' +
@@ -451,10 +447,10 @@ function _card(name, meta, readiness, defaultType, isGuided) {
       : '<div style="height:14px"></div>') +
     '<div style="display:flex;gap:3px;justify-content:center">' +
     (isDyn
-      ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">🎬</button>'
-      : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">📸</button>') +
+      ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Record</button>'
+      : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Capture</button>') +
     (count > 0
-      ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">🗑</button>'
+      ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">Delete</button>'
       : '') +
     '</div>' +
     '</div>';
@@ -469,26 +465,26 @@ function _wideCard(name, meta, readiness, isCustom) {
   var ready = r.ready;
   var needed = r.needed || 0;
 
-  return '<div style="padding:10px 12px;background:var(--s1);border-radius:8px;border:1px solid ' + (ready ? 'var(--g)' : 'var(--brd)') + '">' +
+  return '<div style="padding:10px 12px;background:var(--s1);border-radius:8px;border:1px solid var(--brd)">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">' +
     '<div>' +
     '<span style="font-size:13px;font-weight:700">' + name + '</span> ' +
     '<span class="bg ' + (isDyn ? 'bg-p' : 'bg-g') + '" style="font-size:7px">' + (isDyn ? 'DYN' : 'STA') + '</span>' +
     '</div>' +
     (isCustom
-      ? '<button style="padding:3px 7px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:5px;cursor:pointer" onclick="window._app.deleteGesture(\'' + esc(name) + '\')">✕</button>'
+      ? '<button style="padding:3px 7px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:5px;cursor:pointer" onclick="window._app.deleteGesture(\'' + esc(name) + '\')">Remove</button>'
       : '') +
     '</div>' +
-    '<div style="font-size:8px;color:var(--mx);margin-bottom:5px">📸 ' + sc + ' static · 🎬 ' + dc + ' dynamic</div>' +
+    '<div style="font-size:8px;color:var(--mx);margin-bottom:5px">' + sc + ' static · ' + dc + ' dynamic</div>' +
     '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px">' +
     pBar(isDyn ? dc : sc, isDyn ? 5 : 10, ready ? 'var(--g)' : 'var(--a)') +
-    '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + (ready ? '✓ Ready' : 'Need ' + needed) + '</span>' +
+    '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + (ready ? 'Ready' : 'Need ' + needed) + '</span>' +
     '</div>' +
     '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
-    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--g);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">📸 Static</button>' +
-    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--p);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">🎬 Dynamic</button>' +
+    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Capture</button>' +
+    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Record</button>' +
     (sc + dc > 0
-      ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--r);color:var(--bg);border:none;border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">🗑</button>'
+      ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">Delete</button>'
       : '') +
     '</div>' +
     '</div>';

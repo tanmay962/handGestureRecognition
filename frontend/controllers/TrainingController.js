@@ -148,12 +148,7 @@ export class TrainingController {
   addGesture(name)    { return this.gm.addGesture(name); }
   removeGesture(name) { this.gm.removeGesture(name); }
 
-  async generateAllDemo() {
-    await this.gm.generateAllDemo();
-    eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:'all' });
-  }
-
-  // ── Training (MLP static + LSTM dynamic) ─────────────────────
+  // ── Training (Unified Bidirectional LSTM — static + dynamic) ─────────
   async train() {
     this.isTraining = true;
     this.progress   = 0;
@@ -172,87 +167,90 @@ export class TrainingController {
       return;
     }
 
-    // Validate feature size — warn if mismatch with current config
-    var expectedSize = APP_CONFIG.NN.STATIC_INPUT;
-    if (sd.inputs.length > 0 && sd.inputs[0].length !== expectedSize) {
-      console.warn('[Train] Feature size mismatch — old samples have', sd.inputs[0].length,
-                   'features, current config expects', expectedSize,
-                   '— clearing old model and retraining with available data');
+    // ── Build unified gesture list (static first, then dynamic-only) ────
+    var allNames = sd.names.slice();
+    for (var di = 0; di < dd.names.length; di++) {
+      if (allNames.indexOf(dd.names[di]) === -1) allNames.push(dd.names[di]);
     }
 
-    // — Static MLP —
-    if (sd.inputs.length > 0 && sd.names.length >= 2) {
-      for (var si = 0; si < sd.names.length; si++) this.staticNN.addGesture(sd.names[si], si);
-      this.staticNN.initialize(sd.inputs[0].length, APP_CONFIG.NN.STATIC_HIDDEN, sd.names.length);
+    if (allNames.length < 2) {
+      this.isTraining = false;
+      eventBus.emit(Events.TRAIN_COMPLETE, { error:'Need at least 2 gestures with samples' });
+      return;
+    }
 
-      await fetch(API + '/nn/init', {
+    // Map name → unified index
+    var nameToIdx = {};
+    for (var ni = 0; ni < allNames.length; ni++) nameToIdx[allNames[ni]] = ni;
+
+    // Which gestures are primarily static vs dynamic
+    var gestureTypes = {};
+    for (var si2 = 0; si2 < sd.names.length; si2++) gestureTypes[sd.names[si2]] = 'static';
+    for (var di2 = 0; di2 < dd.names.length; di2++) gestureTypes[dd.names[di2]] = 'dynamic';
+
+    // ── Build combined inputs + labels ───────────────────────────────────
+    // Static inputs:  41-feature vectors — backend repeats to fill sequence
+    // Dynamic inputs: DYNAMIC_FRAMES*41-feature flat sequences
+    var allInputs = [];
+    var allLabels = [];
+    for (var si3 = 0; si3 < sd.inputs.length; si3++) {
+      allInputs.push(sd.inputs[si3]);
+      allLabels.push(nameToIdx[sd.names[sd.labels[si3]]]);
+    }
+    for (var di3 = 0; di3 < dd.inputs.length; di3++) {
+      allInputs.push(dd.inputs[di3]);
+      allLabels.push(nameToIdx[dd.names[dd.labels[di3]]]);
+    }
+
+    // ── Single init call ─────────────────────────────────────────────────
+    await fetch(API + '/nn/init', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        model_type:    'unified',
+        output_size:   allNames.length,
+        gestures:      allNames,
+        gesture_types: gestureTypes,
+        feature_version: APP_CONFIG.NN.FEATURE_VERSION,
+      })
+    });
+
+    // ── Train unified BiLSTM ──────────────────────────────────────────────
+    // Use dynamic-style hyper-params when motion data exists; fall back to
+    // static-style (more epochs, higher lr) when only static samples present.
+    var EPOCHS = (dd.inputs.length > 0) ? 400 : APP_CONFIG.NN.TRAINING_EPOCHS;
+    var BATCH  = (dd.inputs.length > 0) ? 15  : APP_CONFIG.NN.EPOCH_BATCH;
+    var lr     = (dd.inputs.length > 0) ? 0.001 : 0.008;
+
+    for (var ep = 0; ep < EPOCHS; ep += BATCH) {
+      await new Promise(function(r){ setTimeout(r, 4); });
+      var ep2  = Math.min(BATCH, EPOCHS - ep);
+      var res  = await fetch(API + '/nn/train', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          model_type:   'static',
-          input_size:   sd.inputs[0].length,
-          hidden_sizes: APP_CONFIG.NN.STATIC_HIDDEN,
-          output_size:  sd.names.length,
-          gestures:     sd.names,
-          feature_version: APP_CONFIG.NN.FEATURE_VERSION,
-        })
+        body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:ep2, lr:lr })
       });
+      var data = await res.json();
 
-      var STATIC_EPOCHS = APP_CONFIG.NN.TRAINING_EPOCHS;
-      var BATCH = APP_CONFIG.NN.EPOCH_BATCH;
-      for (var ep = 0; ep < STATIC_EPOCHS; ep += BATCH) {
-        await new Promise(function(r){ setTimeout(r, 4); });
-        var ep2  = Math.min(BATCH, STATIC_EPOCHS - ep);
-        var sRes = await fetch(API + '/nn/train', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ model_type:'static', inputs:sd.inputs, labels:sd.labels, epochs:ep2, lr:0.008 })
-        });
-        var sData = await sRes.json();
-        this.staticNN.accuracy     = sData.accuracy;
-        this.staticNN.val_accuracy = sData.val_accuracy || 0;
-        this.staticNN.loss         = sData.loss;
-        this.staticNN.epochs       = sData.epochs;
-        this.staticNN.trained      = true;
-        if (!window._perGestAcc) window._perGestAcc = {};
-        window._perGestAcc.static = sData.per_gesture_acc || {};
-        this.progress = Math.min(85, ((ep + ep2) / STATIC_EPOCHS) * 85);
-        eventBus.emit(Events.TRAIN_PROGRESS, { progress:this.progress, model:'static', accuracy:sData.accuracy });
-      }
-      await fetch(API + '/nn/save/static?source=' + (window._trainSource||'camera'), { method:'POST' });
+      // Mirror stats to both frontend NN objects so views remain consistent
+      this.staticNN.accuracy      = data.accuracy;
+      this.staticNN.val_accuracy  = data.val_accuracy || 0;
+      this.staticNN.loss          = data.loss;
+      this.staticNN.epochs        = data.epochs;
+      this.staticNN.trained       = true;
+      this.dynamicNN.accuracy     = data.accuracy;
+      this.dynamicNN.val_accuracy = data.val_accuracy || 0;
+      this.dynamicNN.loss         = data.loss;
+      this.dynamicNN.epochs       = data.epochs;
+      this.dynamicNN.trained      = true;
+
+      if (!window._perGestAcc) window._perGestAcc = {};
+      window._perGestAcc.static  = data.per_gesture_acc || {};
+      window._perGestAcc.dynamic = data.per_gesture_acc || {};
+
+      this.progress = ((ep + ep2) / EPOCHS) * 100;
+      eventBus.emit(Events.TRAIN_PROGRESS, { progress:this.progress, model:'unified', accuracy:data.accuracy });
     }
 
-    // — Dynamic LSTM —
-    if (dd.inputs.length > 0 && dd.names.length >= 2) {
-      await fetch(API + '/nn/init', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          model_type:   'dynamic',
-          output_size:  dd.names.length,
-          gestures:     dd.names,
-          feature_version: APP_CONFIG.NN.FEATURE_VERSION,
-        })
-      });
-
-      var DYN_EPOCHS = 400, DYN_BATCH = 15;
-      for (var dep = 0; dep < DYN_EPOCHS; dep += DYN_BATCH) {
-        await new Promise(function(r){ setTimeout(r, 4); });
-        var dep2 = Math.min(DYN_BATCH, DYN_EPOCHS - dep);
-        var dRes = await fetch(API + '/nn/train', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ model_type:'dynamic', inputs:dd.inputs, labels:dd.labels, epochs:dep2, lr:0.001 })
-        });
-        var dData = await dRes.json();
-        this.dynamicNN.accuracy     = dData.accuracy;
-        this.dynamicNN.val_accuracy = dData.val_accuracy || 0;
-        this.dynamicNN.loss         = dData.loss;
-        this.dynamicNN.epochs       = dData.epochs;
-        this.dynamicNN.trained      = true;
-        if (!window._perGestAcc) window._perGestAcc = {};
-        window._perGestAcc.dynamic = dData.per_gesture_acc || {};
-        this.progress = 85 + ((dep + dep2) / DYN_EPOCHS) * 15;
-        eventBus.emit(Events.TRAIN_PROGRESS, { progress:this.progress, model:'dynamic', accuracy:dData.accuracy });
-      }
-      await fetch(API + '/nn/save/dynamic', { method:'POST' });
-    }
+    await fetch(API + '/nn/save/unified?source=' + (window._trainSource||'camera'), { method:'POST' });
 
     this.isTraining = false;
     this.progress   = 100;

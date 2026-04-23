@@ -44,6 +44,25 @@ var RecognitionController = (function() {
     this._motionThresh   = APP_CONFIG.RECOGNITION.MOTION_THRESHOLD;
     this._dynamicActive  = false;
 
+    // ── Duplicate prediction guard ────────────────────────────
+    this._predictPending = false;
+
+    // ── Hysteresis ────────────────────────────────────────────
+    this._hysteresisGesture = null;
+
+    // ── Streak gate ───────────────────────────────────────────
+    this._streakName  = null;
+    this._streakCount = 0;
+
+    // ── Prediction trail ─────────────────────────────────────
+    this._predTrail = [];
+
+    // ── Top-3 histogram ──────────────────────────────────────
+    this._topPredictions = [];
+
+    // ── Adaptive cooldown ─────────────────────────────────────
+    this._adaptiveCooldownUntil = 0;
+
     // ── NLP debounce ─────────────────────────────────────────
     this._nlpTimer = null;
 
@@ -94,6 +113,9 @@ var RecognitionController = (function() {
   RecognitionController.prototype._processFrame = function(features) {
     var self = this;
 
+    // Duplicate prediction guard — skip if previous fetch hasn't resolved yet
+    if (this._predictPending) return;
+
     // System gestures check first
     if (this._checkSystemGestures(features)) return;
 
@@ -118,6 +140,7 @@ var RecognitionController = (function() {
 
     // Static prediction
     if (!this.sNN.trained) return;
+    this._predictPending = true;
     fetch('/api/nn/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -145,6 +168,7 @@ var RecognitionController = (function() {
           body: JSON.stringify({ features: traj, model_type: 'dynamic' }),
         }).then(function(r) { return r.json(); })
           .then(function(dynResult) {
+            self._predictPending = false;
             if (dynResult && dynResult.conf > APP_CONFIG.RECOGNITION.DYNAMIC_CONF_THRESH) {
               eventBus.emit(Events.GESTURE_PREDICTING, {
                 gesture: dynResult.name, conf: dynResult.conf, model: 'dynamic'
@@ -152,12 +176,14 @@ var RecognitionController = (function() {
             }
             self._mergeAndStabilise(ensembled, ensembled.conf, dynResult, features);
           }).catch(function() {
+            self._predictPending = false;
             self._mergeAndStabilise(ensembled, ensembled.conf, null, features);
           });
       } else {
+        self._predictPending = false;
         self._mergeAndStabilise(ensembled, ensembled.conf, null, features);
       }
-    }).catch(function() {});
+    }).catch(function() { self._predictPending = false; });
 
     this._lastFeatures = features.slice();
   };
@@ -192,6 +218,17 @@ var RecognitionController = (function() {
     // Look up name from the frontend gesture map
     var bestName = (this.sNN && this.sNN.getName) ? this.sNN.getName(bestIdx) : result.name;
     if (!bestName || bestName === 'Unknown') bestName = result.name;
+
+    // Extract top-3 for confidence histogram display
+    var indexed = [];
+    for (var ti = 0; ti < avg.length; ti++) indexed.push({ idx: ti, conf: avg[ti] });
+    indexed.sort(function(a, b) { return b.conf - a.conf; });
+    this._topPredictions = [];
+    for (var t2 = 0; t2 < Math.min(3, indexed.length); t2++) {
+      var tn = (this.sNN && this.sNN.getName) ? this.sNN.getName(indexed[t2].idx) : String(indexed[t2].idx);
+      if (tn && tn !== 'Unknown') this._topPredictions.push({ name: tn, conf: indexed[t2].conf });
+    }
+
     return { name: bestName, conf: bestConf, idx: bestIdx, probs: avg };
   };
 
@@ -228,9 +265,19 @@ var RecognitionController = (function() {
   // ── Merge static + dynamic, then time-based stability ────
   RecognitionController.prototype._mergeAndStabilise = function(staticResult, smoothedConf, dynResult, features) {
     var finalName = null, finalConf = 0, finalModel = 'none';
-    var dynThresh = APP_CONFIG.RECOGNITION.DYNAMIC_CONF_THRESH;
+    var dynThresh   = APP_CONFIG.RECOGNITION.DYNAMIC_CONF_THRESH;
+    var minReject   = APP_CONFIG.RECOGNITION.MIN_REJECT_CONF      || 0.15;
+    var hystExit    = APP_CONFIG.RECOGNITION.HYSTERESIS_EXIT       || 0.45;
+    var dynMargin   = APP_CONFIG.RECOGNITION.DYNAMIC_PRIORITY_MARGIN || 0.05;
+    var minStreak   = APP_CONFIG.RECOGNITION.MIN_STREAK_FRAMES     || 3;
 
+    // ── 1. Pick winner: dynamic gets priority with margin tie-break ──
     if (dynResult && dynResult.conf > dynThresh) {
+      finalName  = dynResult.name;
+      finalConf  = dynResult.conf;
+      finalModel = 'dynamic';
+    } else if (dynResult && dynResult.conf > smoothedConf - dynMargin && dynResult.conf > dynThresh * 0.85) {
+      // Dynamic within margin of static — prefer dynamic for motion gestures
       finalName  = dynResult.name;
       finalConf  = dynResult.conf;
       finalModel = 'dynamic';
@@ -238,39 +285,74 @@ var RecognitionController = (function() {
       finalName  = staticResult.name;
       finalConf  = smoothedConf;
       finalModel = 'static';
+    } else if (staticResult && smoothedConf >= hystExit && this._hysteresisGesture === staticResult.name) {
+      // ── 2. Hysteresis: hold current gesture at lower exit threshold ──
+      finalName  = staticResult.name;
+      finalConf  = smoothedConf;
+      finalModel = 'static';
     }
 
-    // Update display
-    var gn = document.getElementById('gestName');
-    var gc = document.getElementById('gestConf');
-    var gd = document.getElementById('gestDisp');
-    if (finalName) {
-      if (gd) gd.style.display = 'block';
-      if (gn) gn.textContent = finalName;
-      if (gc) gc.textContent = (finalConf * 100).toFixed(1) + '% [' + finalModel + ']';
+    // ── 3. Rejection zone: discard anything below minimum confidence ──
+    if (finalName && finalConf < minReject) {
+      finalName = null; finalConf = 0;
     }
 
+    // ── Update hysteresis state ──
+    this._hysteresisGesture = finalName || null;
+
+    // ── Reset everything on empty frame ──
     if (!finalName) {
-      this._stableName      = null;
-      this._stableStartTime = null;
-      this._probHistory     = [];
-      // Clear canvas overlay when hand is lost
+      this._stableName        = null;
+      this._stableStartTime   = null;
+      this._probHistory       = [];
+      this._streakName        = null;
+      this._streakCount       = 0;
+      this._hysteresisGesture = null;
       eventBus.emit(Events.GESTURE_PREDICTING, { gesture: null, conf: 0, model: '' });
       return;
     }
 
-    // Time-based stability check
+    // ── 4. Streak gate: require MIN_STREAK_FRAMES consecutive same-gesture frames ──
+    if (finalName === this._streakName) {
+      if (this._streakCount < minStreak) this._streakCount++;
+    } else {
+      // Gesture changed — reset streak and stability timer
+      this._streakName      = finalName;
+      this._streakCount     = 1;
+      this._stableName      = null;
+      this._stableStartTime = null;
+    }
+    // Streak not yet met — update live display but don't start stability timer
+    if (this._streakCount < minStreak) {
+      var gnS = document.getElementById('gestName');
+      var gcS = document.getElementById('gestConf');
+      var gdS = document.getElementById('gestDisp');
+      if (gdS) { gdS.style.display = 'block'; gdS.style.opacity = (0.2 + finalConf * 0.4).toFixed(2); }
+      if (gnS) gnS.textContent = finalName;
+      if (gcS) gcS.textContent = (finalConf * 100).toFixed(1) + '% [building…]';
+      return;
+    }
+
+    // ── 5. Update display with confidence brightness (full opacity once streak met) ──
+    var gn = document.getElementById('gestName');
+    var gc = document.getElementById('gestConf');
+    var gd = document.getElementById('gestDisp');
+    if (gd) { gd.style.display = 'block'; gd.style.opacity = (0.4 + finalConf * 0.6).toFixed(2); }
+    if (gn) gn.textContent = finalName;
+    if (gc) gc.textContent = (finalConf * 100).toFixed(1) + '% [' + finalModel + ']';
+
+    // ── 6. Time-based stability check ──
     var now = Date.now();
     if (finalName === this._stableName) {
       if (!this._stableStartTime) this._stableStartTime = now;
       var holdTime = this._getHoldTime(finalName);
       if (now - this._stableStartTime >= holdTime) {
-        // Check cooldown
         var cooldown = this._getCooldown(finalName, this._lastConfirmedGesture);
         if (now - this._lastConfirmedTime >= cooldown) {
           this._lastConfirmedGesture = finalName;
           this._lastConfirmedTime    = now;
           this._stableStartTime      = null;
+          this._streakCount          = 0;
           this._onGestureConfirmed(finalName, finalConf, finalModel);
         }
       }
@@ -291,9 +373,23 @@ var RecognitionController = (function() {
   RecognitionController.prototype._getCooldown = function(name, last) {
     var isLetter = name.length === 1 && /[A-Z]/.test(name);
     var isNumber = name.length === 1 && /[0-9]/.test(name);
-    if (!isLetter && !isNumber) return APP_CONFIG.RECOGNITION.COOLDOWN_WORD;
-    if (name === last)          return APP_CONFIG.RECOGNITION.COOLDOWN_SAME_LETTER;
-    return APP_CONFIG.RECOGNITION.COOLDOWN_DIFF_LETTER;
+    var base;
+    if (!isLetter && !isNumber) base = APP_CONFIG.RECOGNITION.COOLDOWN_WORD;
+    else if (name === last)     base = APP_CONFIG.RECOGNITION.COOLDOWN_SAME_LETTER;
+    else                        base = APP_CONFIG.RECOGNITION.COOLDOWN_DIFF_LETTER;
+
+    // Adaptive cooldown: reduce after user manually interacts (suggestion, quickTest)
+    if (this._adaptiveCooldownUntil && Date.now() < this._adaptiveCooldownUntil) {
+      var factor = APP_CONFIG.RECOGNITION.ADAPTIVE_COOLDOWN_FACTOR || 0.65;
+      return Math.round(base * factor);
+    }
+    return base;
+  };
+
+  // ── Activate adaptive cooldown window ────────────────────
+  RecognitionController.prototype._activateAdaptiveCooldown = function() {
+    var win = APP_CONFIG.RECOGNITION.ADAPTIVE_COOLDOWN_WINDOW || 3000;
+    this._adaptiveCooldownUntil = Date.now() + win;
   };
 
   // ── Gesture confirmed ─────────────────────────────────────
@@ -335,6 +431,11 @@ var RecognitionController = (function() {
 
     this.log.unshift({ gesture: name, conf: conf, time: new Date(), model: model });
     if (this.log.length > 50) this.log.pop();
+
+    // Prediction trail (last N confirmed gestures for UI display)
+    var trailSize = APP_CONFIG.RECOGNITION.PRED_TRAIL_SIZE || 5;
+    this._predTrail.unshift({ name: name, conf: conf, model: model });
+    if (this._predTrail.length > trailSize) this._predTrail.pop();
 
     eventBus.emit(Events.GESTURE_RECOGNIZED, { gesture: name, conf: conf, model: model });
     eventBus.emit(Events.SENTENCE_UPDATED);
@@ -430,6 +531,7 @@ var RecognitionController = (function() {
   };
 
   RecognitionController.prototype._selectSuggestion = function(index) {
+    this._activateAdaptiveCooldown(); // User interacted via dwell — speed up next recognition
     if (this.sentence.wordSuggestions.length > 0 && index < this.sentence.wordSuggestions.length) {
       var word = this.sentence.wordSuggestions[index];
       this.sentence.acceptWordSuggestion(word);
@@ -465,6 +567,7 @@ var RecognitionController = (function() {
   // ── Public API ────────────────────────────────────────────
   RecognitionController.prototype.addSuggestionWord = function(word) {
     var self = this;
+    this._activateAdaptiveCooldown(); // User is actively choosing — speed up next recognition
     this.sentence.addWord(word);
     return this.nlp.getSuggestions(this.sentence).then(function(s) {
       self.sentence.setSuggestions(s);

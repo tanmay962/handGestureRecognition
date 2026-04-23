@@ -473,25 +473,26 @@ var CameraService = (function() {
       var nameFontSize = Math.min(60, Math.max(28, cw * 0.11));
       var confFontSize = Math.round(nameFontSize * 0.28);
 
+      // Confidence brightness: dim at low confidence, full at high confidence
+      var alpha = Math.min(1, 0.35 + pred.conf * 0.65);
+
       // Fade gradient at bottom so text is readable over any background
       var bgGrad = ctx.createLinearGradient(0, ch * 0.58, 0, ch);
       bgGrad.addColorStop(0, 'rgba(6,8,13,0)');
-      bgGrad.addColorStop(1, 'rgba(6,8,13,0.88)');
+      bgGrad.addColorStop(1, 'rgba(6,8,13,' + (0.88 * alpha) + ')');
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, ch * 0.58, cw, ch * 0.42);
 
       ctx.save();
+      ctx.globalAlpha  = alpha;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'alphabetic';
 
-      // Gesture name — teal→purple gradient with glow
+      // Gesture name — white with glow
       ctx.font        = 'bold ' + nameFontSize + 'px "IBM Plex Mono",monospace';
       ctx.shadowColor = 'rgba(0,0,0,0.95)';
       ctx.shadowBlur  = 18;
-      var nameGrad = ctx.createLinearGradient(cw * 0.2, 0, cw * 0.8, 0);
-      nameGrad.addColorStop(0, '#5eead4');
-      nameGrad.addColorStop(1, '#a78bfa');
-      ctx.fillStyle = nameGrad;
+      ctx.fillStyle   = '#ffffff';
       ctx.fillText(pred.name, cw / 2, ch - 30);
 
       // Confidence + model tag

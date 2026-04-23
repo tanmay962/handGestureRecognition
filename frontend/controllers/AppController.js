@@ -80,9 +80,20 @@ export class AppController {
       }
       rr();
     });
-    // Live prediction → camera canvas overlay
+    // Live prediction → camera canvas overlay + top-3 histogram DOM update
     eventBus.on(Events.GESTURE_PREDICTING, function(d) {
       self.camera.setPrediction(d.gesture || null, d.conf || 0, d.model || '');
+      // Update top-3 confidence histogram directly in DOM (no full re-render needed)
+      var top3 = self.recogCtrl._topPredictions || [];
+      for (var i = 0; i < 3; i++) {
+        var nameEl = document.getElementById('top3n' + i);
+        var barEl  = document.getElementById('top3b' + i);
+        var pctEl  = document.getElementById('top3p' + i);
+        var entry  = top3[i];
+        if (nameEl) nameEl.textContent = entry ? entry.name : '';
+        if (barEl)  barEl.style.width  = entry ? Math.round(entry.conf * 100) + '%' : '0%';
+        if (pctEl)  pctEl.textContent  = entry ? Math.round(entry.conf * 100) + '%' : '';
+      }
     });
     // Clear overlay when recognition stops; show status hint
     eventBus.on(Events.RECOG_STOPPED, function() {
@@ -151,16 +162,14 @@ export class AppController {
 
     try { await this.gestureModel.loadFromDB(); } catch(e) {}
 
-    // Load models
+    // Load unified model (single BiLSTM for static + dynamic)
     try {
       var src = window._trainSource || 'camera';
-      var sd = await (await fetch(API + '/nn/load/static?source='  + src, {method:'POST'})).json();
-      if (sd.ok) { this.staticNN.trained=true; this.staticNN.accuracy=sd.accuracy||0; this.staticNN.epochs=sd.epochs||0; }
-    } catch(e) {}
-    try {
-      var src2 = window._trainSource || 'camera';
-      var dd = await (await fetch(API + '/nn/load/dynamic?source=' + src2, {method:'POST'})).json();
-      if (dd.ok) { this.dynamicNN.trained=true; this.dynamicNN.accuracy=dd.accuracy||0; this.dynamicNN.epochs=dd.epochs||0; }
+      var ud = await (await fetch(API + '/nn/load/unified?source=' + src, {method:'POST'})).json();
+      if (ud.ok) {
+        this.staticNN.trained  = true; this.staticNN.accuracy  = ud.accuracy||0; this.staticNN.epochs  = ud.epochs||0;
+        this.dynamicNN.trained = true; this.dynamicNN.accuracy = ud.accuracy||0; this.dynamicNN.epochs = ud.epochs||0;
+      }
     } catch(e) {}
 
     // Load API key
@@ -191,12 +200,12 @@ export class AppController {
     // WebSocket handlers
     var self = this;
     wsClient.on('train_progress', function(d) {
-      if (d.model === 'static') {
+      if (d.model === 'static' || d.model === 'unified') {
         self.staticNN.accuracy = d.accuracy; self.staticNN.loss = d.loss;
         self.staticNN.epochs = d.epochs; self.staticNN.trained = true;
         if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.static = d.per_gesture_acc; }
       }
-      if (d.model === 'dynamic') {
+      if (d.model === 'dynamic' || d.model === 'unified') {
         self.dynamicNN.accuracy = d.accuracy; self.dynamicNN.loss = d.loss;
         self.dynamicNN.epochs = d.epochs; self.dynamicNN.trained = true;
         if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.dynamic = d.per_gesture_acc; }
@@ -209,7 +218,6 @@ export class AppController {
     wsClient.on('gesture_samples_deleted', function() { self._refreshTrainMeta(); self.view.render(); });
     wsClient.on('gesture_deleted', function() { self._loadCustomGestures(); self._refreshTrainMeta(); self.view.render(); });
     wsClient.on('sentence_updated', function(d) { if (d.words) self.sentenceModel.words = d.words; self.view.render(); });
-    wsClient.on('demo_progress', function() { self._refreshTrainMeta(); self.view.render(); });
 
     this._startLivePredictionLoop();
     await this._autoCamera();
@@ -371,12 +379,6 @@ export class AppController {
   async quickTest(g) { await this.recogCtrl.quickTest(g, this.gestureModel); this.view.render(); }
 
   // ── Training ──────────────────────────────────────────────────────────────
-  async generateDemoData() {
-    await this.trainCtrl.generateAllDemo();
-    await this._refreshTrainMeta();
-    this.view.render();
-  }
-
   async trainModel() {
     if (this.trainCtrl.isTraining) return;
     await this.trainCtrl.train();
@@ -720,6 +722,8 @@ export class AppController {
       mqttTopic:       this.mqttService.topicGesture,
       contextState:    this.recogCtrl.contextState,
       recording:       this.gestureModel.recording,
+      predTrail:       this.recogCtrl._predTrail       || [],
+      topPredictions:  this.recogCtrl._topPredictions  || [],
     };
   }
 }

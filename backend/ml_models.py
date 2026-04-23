@@ -9,6 +9,12 @@ from database import STATIC_FEATURES, DYNAMIC_FEATURES, DYNAMIC_FRAMES
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 FEATURE_VERSION = "1.0"
 
+# ---------------------------------------------------------------------------
+# NOTE: PyTorchNN (MLP) and LSTMModel are kept for reference / backward
+# compatibility with any serialised models on disk, but are no longer used
+# at runtime.  The active model is UnifiedLSTMModel (see bottom of file).
+# ---------------------------------------------------------------------------
+
 #Z-Score
 class FeatureScaler:
     """Fits a z-score scaler on training data and applies it consistently at inference time."""
@@ -538,6 +544,232 @@ class LSTMModel:
                 self.model.to(DEVICE)
             except Exception as e:
                 print(f"[LSTM] Architecture mismatch — retrain needed: {e}")
+
+        self.gestures        = {int(k): v for k, v in d.get("gestures", [])}
+        self.accuracy        = d.get("accuracy",     0.0)
+        self.val_accuracy    = d.get("val_accuracy", 0.0)
+        self.loss            = d.get("loss",         1.0)
+        self.epochs          = d.get("epochs",       0)
+        self.per_gesture_acc = d.get("per_gesture_acc", {})
+        self.trained         = bool(d.get("state_dict"))
+
+
+# ── Unified model: single bidirectional LSTM for static + dynamic gestures ──
+
+class UnifiedLSTMModel:
+    """
+    Single bidirectional LSTM (with attention) that handles BOTH static and
+    dynamic gestures in one model.
+
+    Input preparation:
+      • Static gesture  (41 features)       → frame repeated DYNAMIC_FRAMES times
+      • Dynamic gesture (DYNAMIC_FRAMES*41) → reshaped to (DYNAMIC_FRAMES, 41)
+
+    This lets the same LSTM learn that a "frozen" repeated sequence = static
+    pose, while a varying sequence = motion gesture.
+    """
+
+    def __init__(self):
+        self.model           = None
+        self.gestures        = {}       # idx → name
+        self.gesture_types   = {}       # name → 'static' | 'dynamic'
+        self.feature_version = FEATURE_VERSION
+        self.trained         = False
+        self.accuracy        = 0.0
+        self.val_accuracy    = 0.0
+        self.loss            = 1.0
+        self.epochs          = 0
+        self.hidden_size     = 128
+        self.num_layers      = 2
+        self._output_size    = 0
+        self._input_size     = DYNAMIC_FEATURES   # 41 — used by nn_predict validation
+        self.per_gesture_acc = {}
+
+    def initialize(self, num_classes, gesture_list, gesture_types=None):
+        self._output_size = num_classes
+        self.model = GestureLSTM(
+            DYNAMIC_FEATURES, self.hidden_size, self.num_layers, num_classes,
+            bidirectional=True,
+        ).to(DEVICE)
+        self.gestures      = {i: name for i, name in enumerate(gesture_list)}
+        self.gesture_types = gesture_types or {name: 'static' for name in gesture_list}
+
+    # ------------------------------------------------------------------
+    def _prepare_one(self, raw):
+        """Convert a flat feature vector to a (DYNAMIC_FRAMES, DYNAMIC_FEATURES) array."""
+        arr = np.array(raw, dtype=np.float32)
+        if len(arr) == DYNAMIC_FEATURES:
+            # Static: repeat the single frame to fill the time-axis
+            return np.tile(arr, (DYNAMIC_FRAMES, 1))
+        # Dynamic: pad/truncate then reshape
+        expected = DYNAMIC_FRAMES * DYNAMIC_FEATURES
+        if len(arr) < expected:
+            pad = np.zeros(expected, dtype=np.float32)
+            pad[:len(arr)] = arr
+            arr = pad
+        return arr[:expected].reshape(DYNAMIC_FRAMES, DYNAMIC_FEATURES)
+
+    def _prepare_batch(self, sequences):
+        return np.array([self._prepare_one(s) for s in sequences], dtype=np.float32)
+
+    # ------------------------------------------------------------------
+    def train_batch(self, inputs, labels, epochs=10, lr=0.001):
+        if not inputs or self.model is None:
+            return
+
+        n = len(inputs)
+
+        # 20 % held-out validation split
+        if n >= 5:
+            val_n     = max(1, int(n * 0.2))
+            idx_all   = list(range(n))
+            random.shuffle(idx_all)
+            val_idx   = idx_all[:val_n]
+            train_idx = idx_all[val_n:]
+        else:
+            train_idx = list(range(n))
+            val_idx   = []
+
+        tr_in = [inputs[i] for i in train_idx]
+        tr_lb = [labels[i] for i in train_idx]
+        vl_in = [inputs[i] for i in val_idx]
+        vl_lb = [labels[i] for i in val_idx]
+
+        # Split by type and augment each with its appropriate strategy
+        s_in, s_lb, d_in, d_lb = [], [], [], []
+        for inp, lbl in zip(tr_in, tr_lb):
+            if len(inp) == DYNAMIC_FEATURES:
+                s_in.append(inp); s_lb.append(lbl)
+            else:
+                d_in.append(inp); d_lb.append(lbl)
+
+        if len(s_in) >= 4:
+            s_in, s_lb = augment_static(s_in, s_lb)
+        if len(d_in) >= 3:
+            d_in, d_lb = augment_dynamic(d_in, d_lb)
+
+        tr_in = s_in + d_in
+        tr_lb = s_lb + d_lb
+
+        X = torch.tensor(self._prepare_batch(tr_in), dtype=torch.float32).to(DEVICE)
+        y = torch.tensor(tr_lb, dtype=torch.long).to(DEVICE)
+
+        try:
+            counts = torch.bincount(y, minlength=len(self.gestures)).float()
+            w      = 1.0 / (counts + 1e-6)
+            w      = w / w.sum() * len(self.gestures)
+            crit   = nn.CrossEntropyLoss(weight=w.to(DEVICE), label_smoothing=0.1)
+        except Exception:
+            crit = nn.CrossEntropyLoss(label_smoothing=0.1)
+
+        opt   = optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-4)
+        sched = optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
+
+        self.model.train()
+        for ep in range(epochs):
+            opt.zero_grad()
+            loss = crit(self.model(X), y)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            opt.step()
+            if ep % 5 == 0:
+                sched.step(loss)
+
+        self.model.eval()
+        with torch.no_grad():
+            out   = self.model(X)
+            preds = out.argmax(dim=1)
+            self.accuracy = (preds == y).float().mean().item()
+            self.loss     = crit(out, y).item()
+
+            self.val_accuracy = 0.0
+            if vl_in:
+                Xv = torch.tensor(self._prepare_batch(vl_in), dtype=torch.float32).to(DEVICE)
+                yv = torch.tensor(vl_lb, dtype=torch.long).to(DEVICE)
+                vp = self.model(Xv).argmax(dim=1)
+                self.val_accuracy = float((vp == yv).float().mean().item())
+
+            self.per_gesture_acc = {}
+            for idx, name in self.gestures.items():
+                mask = (y == idx)
+                if mask.sum() > 0:
+                    self.per_gesture_acc[name] = (preds[mask] == y[mask]).float().mean().item()
+
+        self.epochs  += epochs
+        self.trained  = True
+
+    # ------------------------------------------------------------------
+    def predict(self, features, conf_threshold=0.0):
+        if not self.trained or self.model is None:
+            return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": False}
+
+        self.model.eval()
+        seq = self._prepare_one(features)
+        X   = torch.tensor(seq[np.newaxis], dtype=torch.float32).to(DEVICE)
+        with torch.no_grad():
+            probs = torch.softmax(self.model(X), dim=1)[0]
+
+        idx  = int(probs.argmax().item())
+        conf = float(probs[idx].item())
+        return {
+            "idx":             idx,
+            "conf":            conf,
+            "probs":           probs.tolist(),
+            "name":            self.gestures.get(idx, "Unknown"),
+            "below_threshold": conf < conf_threshold,
+        }
+
+    def add_gesture(self, name, idx):
+        self.gestures[idx] = name
+
+    def reset(self):
+        self.model           = None
+        self.trained         = False
+        self.gestures        = {}
+        self.gesture_types   = {}
+        self.accuracy        = 0.0
+        self.val_accuracy    = 0.0
+        self.loss            = 1.0
+        self.epochs          = 0
+        self.per_gesture_acc = {}
+
+    def to_json(self):
+        state = {k: v.tolist() for k, v in self.model.state_dict().items()} if self.model else {}
+        return {
+            "type":            "unified_bilstm",
+            "state_dict":      state,
+            "gestures":        list(self.gestures.items()),
+            "gesture_types":   self.gesture_types,
+            "accuracy":        self.accuracy,
+            "val_accuracy":    self.val_accuracy,
+            "loss":            self.loss,
+            "epochs":          self.epochs,
+            "hidden_size":     self.hidden_size,
+            "num_layers":      self.num_layers,
+            "output_size":     self._output_size,
+            "per_gesture_acc": self.per_gesture_acc,
+            "feature_version": self.feature_version,
+        }
+
+    def from_json(self, d):
+        gesture_list = [v for _, v in sorted(d.get("gestures", []), key=lambda x: int(x[0]))]
+        if not gesture_list:
+            return
+
+        self.hidden_size   = d.get("hidden_size",   128)
+        self.num_layers    = d.get("num_layers",    2)
+        self._output_size  = d.get("output_size",   len(gesture_list))
+        self.feature_version = d.get("feature_version", FEATURE_VERSION)
+        gt = d.get("gesture_types", {})
+        self.initialize(self._output_size, gesture_list, gt)
+
+        if d.get("state_dict"):
+            try:
+                sd = {k: torch.tensor(v) for k, v in d["state_dict"].items()}
+                self.model.load_state_dict(sd)
+                self.model.to(DEVICE)
+            except Exception as e:
+                print(f"[UnifiedBiLSTM] Architecture mismatch — retrain needed: {e}")
 
         self.gestures        = {int(k): v for k, v in d.get("gestures", [])}
         self.accuracy        = d.get("accuracy",     0.0)

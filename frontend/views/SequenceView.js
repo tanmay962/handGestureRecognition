@@ -17,8 +17,8 @@ function _renderIntro() {
   return Card(
     'Gesture Combos',
     '<div style="font-size:12px;color:var(--mx);line-height:1.7">' +
-      '<strong style="color:var(--g)">Combos</strong> fire when you sign a specific sequence of gestures. ' +
-      'The <strong style="color:var(--p)">dynamic model</strong> handles motion-based gestures like J and Z.' +
+      '<strong style="color:#ffffff">Combos</strong> fire when you sign a specific sequence of gestures. ' +
+      'The <strong style="color:#ffffff">dynamic model</strong> handles motion-based gestures like J and Z.' +
     '</div>'
   );
 }
@@ -32,8 +32,8 @@ function _renderBuilder(gestures, seq) {
   }).join('');
 
   var seqPreview = seq.length
-    ? '<div class="fr g5 mb8" style="padding:8px 12px;background:var(--pD);border-radius:8px;border:1px solid rgba(155,143,212,.2);flex-wrap:wrap">' +
-        '<span style="font-size:10px;color:var(--p);font-weight:700">SEQ:</span>' +
+    ? '<div class="fr g5 mb8" style="padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid rgba(255,255,255,0.12);flex-wrap:wrap">' +
+        '<span style="font-size:10px;color:#ffffff;font-weight:700">SEQ:</span>' +
         seq.map(function(g, i) {
           return Badge(g, 'p') + (i < seq.length - 1 ? '<span style="color:var(--dm)">→</span>' : '');
         }).join('') +
@@ -71,7 +71,7 @@ function _renderSavedCombos(combos) {
     return '<div class="fr mb8" style="padding:10px 14px;background:var(--s2);border-radius:8px;border:1px solid var(--brd)">' +
       '<div class="f1">' +
         '<div class="fr g5 mb8" style="flex-wrap:wrap">' + arrows + '</div>' +
-        '<div style="font-size:12px;font-weight:600;color:var(--g)">"' + c.action + '"</div>' +
+        '<div style="font-size:12px;font-weight:600;color:#ffffff">"' + c.action + '"</div>' +
       '</div>' +
       Badge((c.timeout / 1000).toFixed(1) + 's', 'a') +
     '</div>';
