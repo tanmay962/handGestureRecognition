@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-24T17:47:32.795Z
+// Built: 2026-04-24T18:09:41.702Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
