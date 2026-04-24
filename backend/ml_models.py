@@ -204,8 +204,14 @@ class UnifiedLSTMModel:
         self.num_layers      = 2
         self._output_size    = 0
         self._input_size     = DYNAMIC_FEATURES
-        self.per_gesture_acc = {}
-        self.scaler          = FeatureScaler()
+        self.per_gesture_acc       = {}
+        self.scaler                = FeatureScaler()
+        # Post-training calibration
+        self.temperature           = 1.0   # temperature scaling — >1 softens confidence
+        self.per_gesture_threshold = {}    # auto-tuned per-class thresholds from val set
+        self.confusion_matrix      = {}    # true→predicted counts on val set
+        self.margin_threshold      = 0.10  # abstain if top1-top2 < this
+        self.uncertainty_threshold = 0.025 # abstain if MC-dropout variance > this
 
     def initialize(self, num_classes, gesture_list, gesture_types=None):
         self._output_size = num_classes
@@ -244,6 +250,89 @@ class UnifiedLSTMModel:
         yv  = torch.tensor(vl_lb, dtype=torch.long).to(DEVICE)
         with torch.no_grad():
             return float((self.model(Xv).argmax(1) == yv).float().mean())
+
+    # ── Post-training calibration helpers ───────────────────────────────────
+
+    def _calibrate_temperature(self, vl_in, vl_lb):
+        """Grid-search temperature T that minimises NLL on val set.
+        T > 1 softens over-confident predictions; T < 1 sharpens under-confident ones."""
+        if not vl_in or len(vl_in) < 5:
+            self.temperature = 1.0
+            return
+        raw = self._prepare_batch(vl_in)
+        sc  = np.array([self._scale_seq(s) for s in raw])
+        Xv  = torch.tensor(sc, dtype=torch.float32).to(DEVICE)
+        yv  = torch.tensor(vl_lb, dtype=torch.long).to(DEVICE)
+        self.model.eval()
+        with torch.no_grad():
+            logits = self.model(Xv)
+        best_nll, best_T = float('inf'), 1.0
+        for T in [0.5, 0.7, 0.8, 0.9, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0]:
+            nll = nn.CrossEntropyLoss()(logits / T, yv).item()
+            if nll < best_nll:
+                best_nll = nll
+                best_T   = T
+        self.temperature = best_T
+
+    def _auto_thresholds(self, vl_in, vl_lb):
+        """Sweep confidence thresholds per gesture on val set and pick the one
+        that maximises F1.  Stored in per_gesture_threshold."""
+        if not vl_in or len(vl_in) < 5:
+            return
+        raw = self._prepare_batch(vl_in)
+        sc  = np.array([self._scale_seq(s) for s in raw])
+        Xv  = torch.tensor(sc, dtype=torch.float32).to(DEVICE)
+        T   = self.temperature
+        self.model.eval()
+        with torch.no_grad():
+            probs_np = torch.softmax(self.model(Xv) / T, dim=1).cpu().numpy()
+        labels_np = np.array(vl_lb)
+        self.per_gesture_threshold = {}
+        for idx, name in self.gestures.items():
+            true_mask = (labels_np == idx)
+            if true_mask.sum() < 2:
+                continue
+            cls_conf = probs_np[:, idx]
+            best_f1, best_t = -1.0, 0.60
+            for t in np.arange(0.30, 0.86, 0.05):
+                tp = int(((cls_conf >= t) &  true_mask).sum())
+                fp = int(((cls_conf >= t) & ~true_mask).sum())
+                fn = int(((cls_conf <  t) &  true_mask).sum())
+                if tp == 0:
+                    continue
+                prec = tp / (tp + fp) if tp + fp > 0 else 0.0
+                rec  = tp / (tp + fn) if tp + fn > 0 else 0.0
+                f1   = 2 * prec * rec / (prec + rec) if prec + rec > 0 else 0.0
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_t  = float(t)
+            self.per_gesture_threshold[name] = round(best_t, 2)
+
+    def _build_confusion_matrix(self, vl_in, vl_lb):
+        """Compute true→predicted confusion counts on val set."""
+        if not vl_in:
+            return
+        raw = self._prepare_batch(vl_in)
+        sc  = np.array([self._scale_seq(s) for s in raw])
+        Xv  = torch.tensor(sc, dtype=torch.float32).to(DEVICE)
+        yv  = torch.tensor(vl_lb, dtype=torch.long).to(DEVICE)
+        self.model.eval()
+        with torch.no_grad():
+            preds = self.model(Xv).argmax(dim=1)
+        self.confusion_matrix = {}
+        for true_idx in range(len(self.gestures)):
+            true_name = self.gestures.get(true_idx)
+            if not true_name:
+                continue
+            mask = (yv == true_idx)
+            if mask.sum() == 0:
+                continue
+            row = {}
+            for pred_idx in range(len(self.gestures)):
+                count = int((preds[mask] == pred_idx).sum().item())
+                if count > 0:
+                    row[self.gestures[pred_idx]] = count
+            self.confusion_matrix[true_name] = row
 
     def train_batch(self, inputs, labels, epochs=30, lr=0.001, progress_cb=None):
         if not inputs or self.model is None:
@@ -382,6 +471,26 @@ class UnifiedLSTMModel:
                 if vl_in:
                     self.model.eval()
                     v_acc = self._eval_val(vl_in, vl_lb)
+
+                    # Confusion-aware dynamic weights — only in second half of training
+                    # so the model learns the basics before we focus on hard classes
+                    if ep >= epochs // 2:
+                        vl_r_ = self._prepare_batch(vl_in)
+                        vl_s_ = np.array([self._scale_seq(s) for s in vl_r_])
+                        Xv_   = torch.tensor(vl_s_, dtype=torch.float32).to(DEVICE)
+                        yv_   = torch.tensor(vl_lb,  dtype=torch.long).to(DEVICE)
+                        with torch.no_grad():
+                            vp_ = self.model(Xv_).argmax(dim=1)
+                        new_w = w.clone()
+                        for ci in range(len(self.gestures)):
+                            m_ = (yv_ == ci)
+                            if m_.sum() > 0:
+                                cls_acc = (vp_[m_] == yv_[m_]).float().mean().item()
+                                # max 2× boost for 0% accuracy, no boost for 80%+
+                                new_w[ci] = w[ci] * (1.0 + max(0.0, 0.8 - cls_acc))
+                        new_w = new_w / new_w.sum() * len(self.gestures)
+                        crit  = nn.CrossEntropyLoss(weight=new_w.to(DEVICE), label_smoothing=0.1)
+
                     if v_acc >= best_val_acc:
                         best_val_acc      = v_acc
                         best_state        = copy.deepcopy(self.model.state_dict())
@@ -449,51 +558,82 @@ class UnifiedLSTMModel:
                     if mask.sum() > 0:
                         self.per_gesture_acc[name] = (preds[mask] == y[mask]).float().mean().item()
 
+        # Post-training calibration (all three use val set; safe to call when vl_in is empty)
+        self._calibrate_temperature(vl_in, vl_lb)
+        self._auto_thresholds(vl_in, vl_lb)
+        self._build_confusion_matrix(vl_in, vl_lb)
+
         self.epochs  += epochs
         self.trained  = True
 
     def predict(self, features, conf_threshold=0.0):
         if not self.trained or self.model is None:
-            return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": False}
+            return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown",
+                    "below_threshold": False, "margin": 0.0, "uncertainty": 0.0}
 
-        self.model.eval()
         seq = self._scale_seq(self._prepare_one(features))
+        X   = torch.tensor(seq[np.newaxis], dtype=torch.float32).to(DEVICE)
+        T   = self.temperature  # calibrated temperature (1.0 = uncalibrated)
 
-        # Test-time augmentation: average 3 passes (1 clean + 2 with tiny noise)
         all_probs = []
         with torch.no_grad():
-            X = torch.tensor(seq[np.newaxis], dtype=torch.float32).to(DEVICE)
-            all_probs.append(torch.softmax(self.model(X), dim=1)[0])
-            for _ in range(2):
+            # Pass 1: clean, eval mode (no dropout — deterministic baseline)
+            self.model.eval()
+            all_probs.append(torch.softmax(self.model(X) / T, dim=1)[0])
+
+            # Passes 2-5: MC Dropout — train mode (dropout active) + small noise
+            # High variance across these passes = model is genuinely uncertain
+            self.model.train()
+            for _ in range(4):
                 noisy = seq + np.random.normal(0, 0.008, seq.shape).astype(np.float32)
                 Xn = torch.tensor(noisy[np.newaxis], dtype=torch.float32).to(DEVICE)
-                all_probs.append(torch.softmax(self.model(Xn), dim=1)[0])
+                all_probs.append(torch.softmax(self.model(Xn) / T, dim=1)[0])
+            self.model.eval()
 
-        probs = torch.stack(all_probs).mean(0)
-        idx   = int(probs.argmax().item())
-        conf  = float(probs[idx].item())
+        stacked     = torch.stack(all_probs)           # (5, C)
+        probs       = stacked.mean(0)                   # mean probability
+        uncertainty = float(stacked.var(0).mean())      # mean variance = prediction instability
+
+        idx  = int(probs.argmax().item())
+        conf = float(probs[idx].item())
+
+        # Margin gate: when top-2 classes are too close, the model is unsure
+        sorted_p = sorted(probs.tolist(), reverse=True)
+        margin   = sorted_p[0] - (sorted_p[1] if len(sorted_p) > 1 else 0.0)
+
+        below = (
+            conf < conf_threshold
+            or margin    < self.margin_threshold
+            or uncertainty > self.uncertainty_threshold
+        )
+
         return {
             "idx":             idx,
             "conf":            conf,
             "probs":           probs.tolist(),
             "name":            self.gestures.get(idx, "Unknown"),
-            "below_threshold": conf < conf_threshold,
+            "below_threshold": below,
+            "margin":          round(margin, 4),
+            "uncertainty":     round(uncertainty, 6),
         }
 
     def add_gesture(self, name, idx):
         self.gestures[idx] = name
 
     def reset(self):
-        self.model           = None
-        self.trained         = False
-        self.gestures        = {}
-        self.gesture_types   = {}
-        self.accuracy        = 0.0
-        self.val_accuracy    = 0.0
-        self.loss            = 1.0
-        self.epochs          = 0
-        self.per_gesture_acc = {}
-        self.scaler          = FeatureScaler()
+        self.model                 = None
+        self.trained               = False
+        self.gestures              = {}
+        self.gesture_types         = {}
+        self.accuracy              = 0.0
+        self.val_accuracy          = 0.0
+        self.loss                  = 1.0
+        self.epochs                = 0
+        self.per_gesture_acc       = {}
+        self.scaler                = FeatureScaler()
+        self.temperature           = 1.0
+        self.per_gesture_threshold = {}
+        self.confusion_matrix      = {}
 
     def to_json(self):
         state = {k: v.tolist() for k, v in self.model.state_dict().items()} if self.model else {}
@@ -509,9 +649,12 @@ class UnifiedLSTMModel:
             "hidden_size":     self.hidden_size,
             "num_layers":      self.num_layers,
             "output_size":     self._output_size,
-            "per_gesture_acc": self.per_gesture_acc,
-            "feature_version": self.feature_version,
-            "scaler":          self.scaler.to_dict(),
+            "per_gesture_acc":       self.per_gesture_acc,
+            "feature_version":       self.feature_version,
+            "scaler":                self.scaler.to_dict(),
+            "temperature":           self.temperature,
+            "per_gesture_threshold": self.per_gesture_threshold,
+            "confusion_matrix":      self.confusion_matrix,
         }
 
     def from_json(self, d):
@@ -535,11 +678,14 @@ class UnifiedLSTMModel:
             except Exception as e:
                 print(f"[UnifiedBiLSTM] retrain needed: {e}")
 
-        self.gestures        = {int(k): v for k, v in d.get("gestures", [])}
-        self.accuracy        = d.get("accuracy",        0.0)
-        self.val_accuracy    = d.get("val_accuracy",    0.0)
-        self.loss            = d.get("loss",            1.0)
-        self.epochs          = d.get("epochs",          0)
-        self.per_gesture_acc = d.get("per_gesture_acc", {})
+        self.gestures              = {int(k): v for k, v in d.get("gestures", [])}
+        self.accuracy              = d.get("accuracy",              0.0)
+        self.val_accuracy          = d.get("val_accuracy",          0.0)
+        self.loss                  = d.get("loss",                  1.0)
+        self.epochs                = d.get("epochs",                0)
+        self.per_gesture_acc       = d.get("per_gesture_acc",       {})
+        self.temperature           = d.get("temperature",           1.0)
+        self.per_gesture_threshold = d.get("per_gesture_threshold", {})
+        self.confusion_matrix      = d.get("confusion_matrix",      {})
         if d.get("scaler"):
             self.scaler.from_dict(d["scaler"])

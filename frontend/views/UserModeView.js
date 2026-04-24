@@ -70,6 +70,10 @@ function _renderUserCamera(camActive, cameraError, trained, running) {
         '<div class="gesture-name" id="gestName"></div>' +
         '<div class="gesture-conf" id="gestConf"></div>' +
       '</div>' +
+      '<div class="vid-gesture" id="auxGestDisp" style="display:none;bottom:60px;font-size:0.75em;opacity:0.75">' +
+        '<div class="gesture-name" id="auxGestName" style="font-size:18px"></div>' +
+        '<div class="gesture-conf" id="auxGestConf"></div>' +
+      '</div>' +
       (!camActive ? '<div class="vid-overlay"><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
     '</div>' +
     '<div style="height:3px;background:var(--s2)"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>' +

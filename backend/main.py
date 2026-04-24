@@ -311,9 +311,14 @@ async def lifespan(app):
     if model_row:
         try:
             unified_nn.from_json(json.loads(model_row['data']))
+            # Restore auto-calibrated per-gesture thresholds into runtime map
+            if unified_nn.per_gesture_threshold:
+                for gname, thresh in unified_nn.per_gesture_threshold.items():
+                    _gesture_thresholds.setdefault(gname, thresh)
             print(
                 f"[Gesture Detection] Auto-loaded saved model | "
-                f"gestures={len(unified_nn.gestures)} acc={unified_nn.accuracy:.3f}"
+                f"gestures={len(unified_nn.gestures)} acc={unified_nn.accuracy:.3f} "
+                f"T={unified_nn.temperature:.2f}"
             )
         except Exception as e:
             print(f"[Gesture Detection] Auto-load failed (will need manual train/load): {e}")
@@ -369,8 +374,9 @@ class NNTrainRequest(BaseModel):
     lr:         float = 0.001
 
 class PredictRequest(BaseModel):
-    features:   list
-    model_type: str = 'static'
+    features:     list
+    aux_features: list = []   # hand-swapped vector for independent aux-hand prediction
+    model_type:   str  = 'static'
 
 class SampleSaveRequest(BaseModel):
     gesture:     str
@@ -482,6 +488,10 @@ async def _do_auto_retrain():
 
 @app.get("/favicon.ico")
 async def favicon():
+    from fastapi.responses import FileResponse
+    ico = FRONTEND / "favicon.ico"
+    if ico.exists():
+        return FileResponse(str(ico), media_type="image/x-icon")
     return Response(status_code=204)
 
 @app.get("/api/health")
@@ -544,29 +554,41 @@ async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
             lambda: unified_nn.train_batch(req.inputs, req.labels, req.epochs, req.lr, _progress),
         )
 
+    # Sync auto-calibrated per-gesture thresholds to the runtime threshold map
+    if unified_nn.per_gesture_threshold:
+        with get_db() as db:
+            for gname, thresh in unified_nn.per_gesture_threshold.items():
+                _gesture_thresholds[gname] = thresh
+                db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)",
+                           (f"conf_threshold_{gname}", str(thresh)))
+
     await push("train_progress", {
-        "model":           req.model_type,
-        "accuracy":        unified_nn.accuracy,
-        "val_accuracy":    unified_nn.val_accuracy,
-        "loss":            unified_nn.loss,
-        "epochs":          unified_nn.epochs,
-        "per_gesture_acc": unified_nn.per_gesture_acc,
-        "progress_pct":    100,
-        "complete":        True,
+        "model":                   req.model_type,
+        "accuracy":                unified_nn.accuracy,
+        "val_accuracy":            unified_nn.val_accuracy,
+        "loss":                    unified_nn.loss,
+        "epochs":                  unified_nn.epochs,
+        "per_gesture_acc":         unified_nn.per_gesture_acc,
+        "temperature":             unified_nn.temperature,
+        "per_gesture_threshold":   unified_nn.per_gesture_threshold,
+        "progress_pct":            100,
+        "complete":                True,
     })
-    log_session("train_batch", detail=f"{req.model_type} acc={unified_nn.accuracy:.3f} val={unified_nn.val_accuracy:.3f}")
+    log_session("train_batch", detail=f"{req.model_type} acc={unified_nn.accuracy:.3f} val={unified_nn.val_accuracy:.3f} T={unified_nn.temperature:.2f}")
     return {
-        "accuracy":        unified_nn.accuracy,
-        "val_accuracy":    unified_nn.val_accuracy,
-        "loss":            unified_nn.loss,
-        "epochs":          unified_nn.epochs,
-        "per_gesture_acc": unified_nn.per_gesture_acc,
+        "accuracy":              unified_nn.accuracy,
+        "val_accuracy":          unified_nn.val_accuracy,
+        "loss":                  unified_nn.loss,
+        "epochs":                unified_nn.epochs,
+        "per_gesture_acc":       unified_nn.per_gesture_acc,
+        "temperature":           unified_nn.temperature,
+        "per_gesture_threshold": unified_nn.per_gesture_threshold,
     }
 
 @app.post("/api/nn/predict")
 def nn_predict(req: PredictRequest):
     if not unified_nn.trained:
-        return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": True}
+        return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": True, "aux": None}
 
     raw = unified_nn.predict(req.features, conf_threshold=0.0)
 
@@ -582,6 +604,15 @@ def nn_predict(req: PredictRequest):
                 "INSERT INTO prediction_log(gesture,confidence,model_type,created_at) VALUES(?,?,?,?)",
                 (result["name"], result["conf"], req.model_type, time.time()),
             )
+
+    # Aux-hand independent prediction using hand-swapped feature vector
+    if req.aux_features and len(req.aux_features) >= 41:
+        aux_raw = unified_nn.predict(req.aux_features, conf_threshold=0.0)
+        aux_thresh = _gesture_thresholds.get(aux_raw["name"], _conf_threshold)
+        aux_raw["below_threshold"] = aux_raw["conf"] < aux_thresh
+        result["aux"] = aux_raw
+    else:
+        result["aux"] = None
 
     return result
 
@@ -649,6 +680,24 @@ async def nn_reset_all(_: None = Depends(require_admin)):
 @app.get("/api/nn/per_gesture_accuracy")
 def per_gesture_accuracy():
     return {"static": unified_nn.per_gesture_acc, "dynamic": unified_nn.per_gesture_acc}
+
+@app.get("/api/nn/confusion_matrix")
+def get_confusion_matrix():
+    """Confusion matrix from last training's val set (true → predicted counts)."""
+    return {
+        "matrix":   unified_nn.confusion_matrix,
+        "gestures": list(unified_nn.gestures.values()),
+    }
+
+@app.get("/api/nn/calibration")
+def get_calibration():
+    """Post-training calibration state: temperature, per-gesture thresholds, margins."""
+    return {
+        "temperature":             unified_nn.temperature,
+        "per_gesture_threshold":   unified_nn.per_gesture_threshold,
+        "margin_threshold":        unified_nn.margin_threshold,
+        "uncertainty_threshold":   unified_nn.uncertainty_threshold,
+    }
 
 
 # Confidence threshold

@@ -28,8 +28,10 @@ var CameraService = (function() {
 
     // Camera facing mode: 'user' (front) or 'environment' (back)
     this.facingMode = 'user';
-    // Current live prediction for canvas overlay
+    // Current live prediction for canvas overlay (dom hand)
     this._currentPrediction = null;
+    // Independent aux-hand prediction for canvas overlay
+    this._auxPrediction     = null;
     // Status text shown on canvas when no prediction is active
     this._statusText = null;
 
@@ -132,8 +134,9 @@ var CameraService = (function() {
   };
 
   // ── Set live prediction for canvas overlay ───────────────────
-  CameraService.prototype.setPrediction = function(name, conf, model) {
+  CameraService.prototype.setPrediction = function(name, conf, model, auxName, auxConf) {
     this._currentPrediction = name ? { name: name, conf: conf || 0, model: model || '' } : null;
+    this._auxPrediction = (auxName && auxConf > 0.3) ? { name: auxName, conf: auxConf || 0 } : null;
   };
 
   // ── Set status text shown when no prediction is active ───────
@@ -532,41 +535,59 @@ var CameraService = (function() {
     }
 
     // ── Prediction overlay drawn directly on canvas ───────────
-    if (this._currentPrediction) {
+    if (this._currentPrediction || this._auxPrediction) {
       var pred = this._currentPrediction;
+      var aux  = this._auxPrediction;
       var cw = canvas.width, ch = canvas.height;
       var nameFontSize = Math.min(60, Math.max(28, cw * 0.11));
       var confFontSize = Math.round(nameFontSize * 0.28);
+      var auxFontSize  = Math.round(nameFontSize * 0.55);
 
-      // Confidence brightness: dim at low confidence, full at high confidence
-      var alpha = Math.min(1, 0.35 + pred.conf * 0.65);
+      var alpha = pred ? Math.min(1, 0.35 + pred.conf * 0.65) : 0.5;
 
-      // Fade gradient at bottom so text is readable over any background
-      var bgGrad = ctx.createLinearGradient(0, ch * 0.58, 0, ch);
+      // Fade gradient — taller when aux label is also showing, normal otherwise
+      var gradStart = aux ? 0.50 : 0.58;
+      var bgGrad = ctx.createLinearGradient(0, ch * gradStart, 0, ch);
       bgGrad.addColorStop(0, 'rgba(6,8,13,0)');
       bgGrad.addColorStop(1, 'rgba(6,8,13,' + (0.88 * alpha) + ')');
       ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, ch * 0.58, cw, ch * 0.42);
+      ctx.fillRect(0, ch * gradStart, cw, ch * (1 - gradStart));
 
       ctx.save();
-      ctx.globalAlpha  = alpha;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'alphabetic';
 
-      // Gesture name — white with glow
-      ctx.font        = 'bold ' + nameFontSize + 'px "IBM Plex Mono",monospace';
-      ctx.shadowColor = 'rgba(0,0,0,0.95)';
-      ctx.shadowBlur  = 18;
-      ctx.fillStyle   = '#ffffff';
-      ctx.fillText(pred.name, cw / 2, ch - 30);
+      if (pred) {
+        ctx.globalAlpha = alpha;
+        // Dom gesture name
+        ctx.font        = 'bold ' + nameFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.shadowColor = 'rgba(0,0,0,0.95)';
+        ctx.shadowBlur  = 18;
+        ctx.fillStyle   = '#ffffff';
+        ctx.fillText(pred.name, cw / 2, ch - 30);
+        // Confidence + model tag
+        ctx.font      = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.fillStyle = 'rgba(220,224,236,0.80)';
+        ctx.shadowBlur = 6;
+        var confLabel = (pred.conf * 100).toFixed(1) + '%';
+        if (pred.model) confLabel += '  [' + pred.model + ']';
+        ctx.fillText(confLabel, cw / 2, ch - 8);
+      }
 
-      // Confidence + model tag
-      ctx.font        = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
-      ctx.fillStyle   = 'rgba(220,224,236,0.80)';
-      ctx.shadowBlur  = 6;
-      var confLabel   = (pred.conf * 100).toFixed(1) + '%';
-      if (pred.model) confLabel += '  [' + pred.model + ']';
-      ctx.fillText(confLabel, cw / 2, ch - 8);
+      // Aux-hand prediction — smaller badge above dom prediction
+      if (aux) {
+        var auxAlpha = Math.min(0.85, 0.3 + aux.conf * 0.55);
+        ctx.globalAlpha = auxAlpha;
+        ctx.font        = 'bold ' + auxFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.shadowColor = 'rgba(0,0,0,0.9)';
+        ctx.shadowBlur  = 10;
+        ctx.fillStyle   = 'rgba(180,220,255,0.9)'; // tinted blue to distinguish from dom
+        var auxY = pred ? ch - 30 - nameFontSize - 10 : ch - 30;
+        ctx.fillText(aux.name, cw / 2, auxY);
+        ctx.font      = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.fillStyle = 'rgba(160,200,240,0.70)';
+        ctx.fillText((aux.conf * 100).toFixed(1) + '% [aux]', cw / 2, auxY + confFontSize + 4);
+      }
 
       ctx.restore();
     }

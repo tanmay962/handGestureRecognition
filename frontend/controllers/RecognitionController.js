@@ -62,6 +62,15 @@ var RecognitionController = (function() {
     // ── Adaptive cooldown ─────────────────────────────────────
     this._adaptiveCooldownUntil = 0;
 
+    // ── Aux-hand independent tracking (word-level gestures only) ─
+    this._streakNameAux      = null;
+    this._streakCountAux     = 0;
+    this._stableNameAux      = null;
+    this._stableStartTimeAux = null;
+    this._lastConfTimeAux    = 0;
+    this._probHistoryAux     = [];
+    this._auxPrediction      = null; // { name, conf } for live display
+
     // ── NLP debounce ─────────────────────────────────────────
     this._nlpTimer = null;
 
@@ -97,6 +106,7 @@ var RecognitionController = (function() {
   RecognitionController.prototype.stop = function() {
     this.running = false;
     this.contextState = 'IDLE';
+    this._clearAuxPrediction();
     eventBus.emit(Events.RECOG_STOPPED);
   };
 
@@ -137,23 +147,37 @@ var RecognitionController = (function() {
       this._frameBuffer.shift();
     }
 
+    // Build aux-swapped feature vector when aux hand is present (features[39] = auxPresent)
+    var auxSwapped = this._buildAuxSwapped(features);
+
     // Static prediction
     if (!this.sNN.trained) return;
     this._predictPending = true;
     fetch('/api/nn/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ features: features, model_type: 'static' }),
+      body: JSON.stringify({ features: features, aux_features: auxSwapped || [], model_type: 'static' }),
     }).then(function(r) {
       return r.json();
     }).then(function(staticResult) {
       // Ensemble: average last N probability vectors, take argmax of the mean
       var ensembled = self._ensembleVote(staticResult);
 
+      // Handle aux-hand result independently
+      if (staticResult.aux) {
+        self._handleAuxResult(staticResult.aux);
+      } else {
+        self._clearAuxPrediction();
+      }
+
       // Broadcast live prediction to canvas overlay on every frame
       if (ensembled && ensembled.name && ensembled.conf > 0.25) {
         eventBus.emit(Events.GESTURE_PREDICTING, {
-          gesture: ensembled.name, conf: ensembled.conf, model: 'static'
+          gesture:    ensembled.name,
+          conf:       ensembled.conf,
+          model:      'static',
+          auxGesture: self._auxPrediction ? self._auxPrediction.name : null,
+          auxConf:    self._auxPrediction ? self._auxPrediction.conf : 0,
         });
       }
 
@@ -185,6 +209,116 @@ var RecognitionController = (function() {
     }).catch(function() { self._predictPending = false; });
 
     this._lastFeatures = features.slice();
+  };
+
+  // ── Aux-hand feature swap ────────────────────────────────
+  // Moves aux hand features (11-21) into dom slot (0-10), zeros dom slot.
+  // Result: model predicts what the *left* hand is doing, independently.
+  RecognitionController.prototype._buildAuxSwapped = function(features) {
+    if (!features || !features[39]) return null; // no aux hand present
+    var v = features.slice();
+    for (var i = 0; i < 11; i++) {
+      v[i]      = features[i + 11]; // aux → dom slot
+      v[i + 11] = 0;                // clear aux slot
+    }
+    v[38] = features[39]; // auxPresent → domPresent flag
+    v[39] = 0;
+    return v;
+  };
+
+  // ── Aux-hand ensemble (mirrors _ensembleVote but uses separate history) ─
+  RecognitionController.prototype._ensembleAux = function(result) {
+    if (!result || !result.probs || result.probs.length === 0) return result;
+    this._probHistoryAux.push({ probs: result.probs.slice() });
+    if (this._probHistoryAux.length > this._ensembleWindow) this._probHistoryAux.shift();
+    if (this._probHistoryAux.length < 2) return result;
+
+    var n = result.probs.length;
+    var avg = new Array(n).fill(0);
+    for (var h = 0; h < this._probHistoryAux.length; h++) {
+      var pv = this._probHistoryAux[h].probs;
+      for (var j = 0; j < n && j < pv.length; j++) avg[j] += pv[j] / this._probHistoryAux.length;
+    }
+    var bestIdx = 0, bestConf = 0;
+    for (var k = 0; k < avg.length; k++) {
+      if (avg[k] > bestConf) { bestConf = avg[k]; bestIdx = k; }
+    }
+    var bestName = (this.sNN && this.sNN.getName) ? this.sNN.getName(bestIdx) : result.name;
+    if (!bestName || bestName === 'Unknown') bestName = result.name;
+    return { name: bestName, conf: bestConf, idx: bestIdx, probs: avg };
+  };
+
+  // ── Aux-hand prediction handler ──────────────────────────
+  // Aux hand fires word-level gestures only — letters stay on dom hand
+  // to avoid collision with ongoing spelling.
+  RecognitionController.prototype._handleAuxResult = function(result) {
+    var ensembled = this._ensembleAux(result);
+    var isLetterOrDigit = ensembled.name && ensembled.name.length === 1 && /[A-Z0-9]/.test(ensembled.name);
+
+    if (!ensembled || ensembled.conf < this.confThresh || ensembled.below_threshold || isLetterOrDigit) {
+      this._clearAuxPrediction();
+      return;
+    }
+
+    // Update live display (shown on canvas + DOM badge)
+    this._auxPrediction = { name: ensembled.name, conf: ensembled.conf };
+    this._updateAuxDisplay(ensembled.name, ensembled.conf);
+
+    // Streak gate
+    if (ensembled.name === this._streakNameAux) {
+      this._streakCountAux++;
+    } else {
+      this._streakNameAux      = ensembled.name;
+      this._streakCountAux     = 1;
+      this._stableNameAux      = null;
+      this._stableStartTimeAux = null;
+    }
+    var minStreak = APP_CONFIG.RECOGNITION.MIN_STREAK_FRAMES || 2;
+    if (this._streakCountAux < minStreak) return;
+
+    // Time-based stability
+    var now = Date.now();
+    if (ensembled.name === this._stableNameAux) {
+      if (!this._stableStartTimeAux) this._stableStartTimeAux = now;
+      if (now - this._stableStartTimeAux >= APP_CONFIG.RECOGNITION.STABLE_MS_WORD) {
+        if (now - this._lastConfTimeAux >= APP_CONFIG.RECOGNITION.COOLDOWN_WORD) {
+          this._lastConfTimeAux    = now;
+          this._stableStartTimeAux = null;
+          this._streakCountAux     = 0;
+          this._onGestureConfirmed(ensembled.name, ensembled.conf, 'aux-hand');
+        }
+      }
+    } else {
+      this._stableNameAux      = ensembled.name;
+      this._stableStartTimeAux = now;
+    }
+  };
+
+  RecognitionController.prototype._clearAuxPrediction = function() {
+    if (this._auxPrediction) {
+      this._auxPrediction      = null;
+      this._stableNameAux      = null;
+      this._stableStartTimeAux = null;
+      this._streakNameAux      = null;
+      this._streakCountAux     = 0;
+      this._probHistoryAux     = [];
+      this._updateAuxDisplay(null, 0);
+    }
+  };
+
+  RecognitionController.prototype._updateAuxDisplay = function(name, conf) {
+    var el = document.getElementById('auxGestDisp');
+    var en = document.getElementById('auxGestName');
+    var ec = document.getElementById('auxGestConf');
+    if (!el) return;
+    if (!name) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    el.style.opacity = (0.4 + conf * 0.6).toFixed(2);
+    if (en) en.textContent = name;
+    if (ec) ec.textContent = (conf * 100).toFixed(1) + '% [aux]';
   };
 
   // ── Probability-vector ensemble ──────────────────────────

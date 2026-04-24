@@ -80,7 +80,7 @@ export class AppController {
     });
     // Live prediction → camera canvas overlay + top-3 histogram DOM update
     eventBus.on(Events.GESTURE_PREDICTING, function(d) {
-      self.camera.setPrediction(d.gesture || null, d.conf || 0, d.model || '');
+      self.camera.setPrediction(d.gesture || null, d.conf || 0, d.model || '', d.auxGesture || null, d.auxConf || 0);
       // Update top-3 confidence histogram directly in DOM (no full re-render needed)
       var top3 = self.recogCtrl._topPredictions || [];
       for (var i = 0; i < 3; i++) {
