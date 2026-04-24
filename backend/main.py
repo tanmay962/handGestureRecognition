@@ -4,6 +4,10 @@ import json
 import math
 import os
 import time
+
+# Load backend/.env automatically so GEMINI_API_KEY etc. work without manual export
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -1292,8 +1296,9 @@ def set_gesture_threshold(gesture: str, req: ConfThresholdRequest):
 
 @app.get("/api/settings/gemini_key")
 def get_gemini_key():
-    """Expose server-side Gemini API key so the frontend can use it without the user entering it."""
-    return {"available": bool(_GEMINI_API_KEY), "key": _GEMINI_API_KEY if _GEMINI_API_KEY else None}
+    """Tell the frontend whether a Gemini key is available (env or DB). Never expose the key itself."""
+    key = _get_effective_gemini_key()
+    return {"available": bool(key)}
 
 @app.get("/api/settings/{key}")
 def get_setting(key: str):
@@ -1312,6 +1317,111 @@ def delete_setting(key: str):
     with get_db() as db:
         db.execute("DELETE FROM settings WHERE key=?", (key,))
     return {"ok": True}
+
+
+# ── Gemini proxy ─────────────────────────────────────────────────────────────
+# All Gemini calls go through here so the API key never reaches the browser.
+
+def _get_effective_gemini_key() -> str:
+    """Env var takes priority; fall back to user-supplied key stored in DB."""
+    if _GEMINI_API_KEY:
+        return _GEMINI_API_KEY
+    with get_db() as db:
+        row = db.execute("SELECT value FROM settings WHERE key='apiKey'").fetchone()
+    if row and row['value']:
+        try:
+            import json as _json
+            return _json.loads(row['value']).strip()
+        except Exception:
+            return str(row['value']).strip()
+    return ""
+
+_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+async def _gemini_call(prompt: str, temperature: float = 0.4, max_tokens: int = 50) -> str | None:
+    key = _get_effective_gemini_key()
+    if not key:
+        return None
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens, "topP": 0.8},
+    }
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{_GEMINI_ENDPOINT}?key={key}", json=payload)
+        if not r.is_success:
+            return None
+        d = r.json()
+        return d["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as e:
+        print(f"[Gemini] call failed: {e}")
+        return None
+
+class GeminiSuggestRequest(BaseModel):
+    sentence: str = ""
+    last_word: str = ""
+    context: str = ""
+
+class GeminiCompleteRequest(BaseModel):
+    sentence: str
+
+class GeminiGrammarRequest(BaseModel):
+    sentence: str
+
+class GeminiKeyRequest(BaseModel):
+    key: str
+
+@app.post("/api/gemini/suggestions")
+async def gemini_suggestions(req: GeminiSuggestRequest):
+    prompt = (
+        f'You are a predictive text assistant for sign language. User builds sentences word by word.\n'
+        f'Context: "{req.context}"\nSentence: "{req.sentence or "(empty)"}"\n'
+        + (f'Last word: "{req.last_word}"\n' if req.last_word else '')
+        + 'Suggest exactly 5 next words. Respond ONLY with JSON array like ["w1","w2","w3","w4","w5"]'
+    )
+    text = await _gemini_call(prompt, temperature=0.4, max_tokens=50)
+    if not text:
+        return {"suggestions": None}
+    import re
+    m = re.search(r'\[[\s\S]*?\]', text.replace("```json", "").replace("```", ""))
+    if m:
+        try:
+            words = json.loads(m.group(0))
+            if isinstance(words, list) and words:
+                return {"suggestions": [str(w).lower() for w in words[:5]]}
+        except Exception:
+            pass
+    return {"suggestions": None}
+
+@app.post("/api/gemini/complete")
+async def gemini_complete(req: GeminiCompleteRequest):
+    if not req.sentence:
+        return {"completion": None}
+    text = await _gemini_call(
+        f'Complete naturally: "{req.sentence}"\nReturn ONLY completed sentence, no quotes, under 10 words.',
+        temperature=0.3, max_tokens=30,
+    )
+    return {"completion": text}
+
+@app.post("/api/gemini/grammar")
+async def gemini_grammar(req: GeminiGrammarRequest):
+    if not req.sentence:
+        return {"corrected": None}
+    text = await _gemini_call(
+        f'Fix grammar: "{req.sentence}"\nReturn ONLY corrected sentence.',
+        temperature=0.1, max_tokens=50,
+    )
+    return {"corrected": text}
+
+@app.post("/api/gemini/test")
+async def gemini_test(req: GeminiKeyRequest):
+    """Store a user-supplied key in DB and verify it works."""
+    # Save to DB first so _get_effective_gemini_key picks it up
+    with get_db() as db:
+        db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", ("apiKey", json.dumps(req.key)))
+    text = await _gemini_call("Say OK", temperature=0.1, max_tokens=5)
+    return {"ok": bool(text)}
 
 
 # Frontend static files (must be last)
