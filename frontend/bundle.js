@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-24T16:22:24.918Z
+// Built: 2026-04-24T16:29:50.677Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -53,12 +53,12 @@ var APP_CONFIG = {
     ENSEMBLE_WINDOW:       5,
     // TTS word-queue buffer — words signed within this window are spoken as one phrase
     TTS_BUFFER_MS:         2000,
-    // Hysteresis — keep active gesture alive during brief dips
-    HYSTERESIS_EXIT:          0.40,
-    // Streak gate — frames before hold timer starts
-    MIN_STREAK_FRAMES:        2,
-    // Rejection zone
-    MIN_REJECT_CONF:          0.12,
+    // Hysteresis — keep active gesture alive during brief dips (raised from 0.40 to reduce false drops)
+    HYSTERESIS_EXIT:          0.50,
+    // Streak gate — require 3 consecutive same-gesture frames before starting hold timer
+    MIN_STREAK_FRAMES:        3,
+    // Rejection zone — discard anything below this confidence outright
+    MIN_REJECT_CONF:          0.15,
     // Dynamic priority margin
     DYNAMIC_PRIORITY_MARGIN:  0.05,
     // Prediction trail
@@ -1631,7 +1631,7 @@ class NLPService {
         sentenceModel.getLastWord(),
         sentenceModel.getContextString()
       );
-      if (ai) return ai;
+      if (ai && ai.length > 0) return ai;
     }
 
     // 2. Try gesture-aware personal backend suggestions
@@ -3074,6 +3074,9 @@ var RecognitionController = (function() {
     // ── Top-3 histogram ──────────────────────────────────────
     this._topPredictions = [];
 
+    // ── Input mode ('camera' | 'glove' | 'both') ─────────────
+    this.inputMode = 'camera';
+
     // ── Adaptive cooldown ─────────────────────────────────────
     this._adaptiveCooldownUntil = 0;
 
@@ -3199,6 +3202,7 @@ var RecognitionController = (function() {
       // Dynamic prediction if motion detected and buffer ready
       if (self.dNN.trained && self._dynamicActive && self._frameBuffer.length >= 20) {
         var traj = self._trimmedBuffer();
+        self._frameBuffer   = []; // clear immediately so next gesture starts fresh
         self._dynamicActive = false;
         fetch('/api/nn/predict', {
           method: 'POST',
@@ -3568,6 +3572,7 @@ var RecognitionController = (function() {
         this.sentence.clearSpelling();
       }
       this.sentence.addWordFromGesture(name.toLowerCase(), name);
+      this.nlp.learnWord(name.toLowerCase()); // build personal vocab from confirmed gestures
       this.tts.speakIfAuto(name);
       // NLP debounce — wait before fetching
       this._scheduleNLP();
@@ -4137,6 +4142,7 @@ class AppController {
 
     this.simFlex = [0,0,0,0,0];
     this.simIMU  = {ax:0,ay:0,az:0,gx:0,gy:0,gz:0};
+    this._cameraStarting = false;
 
     // Global state consumed by TrainView (no optional chaining needed)
     window._trainMeta      = {};

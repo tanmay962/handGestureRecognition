@@ -59,6 +59,9 @@ var RecognitionController = (function() {
     // ── Top-3 histogram ──────────────────────────────────────
     this._topPredictions = [];
 
+    // ── Input mode ('camera' | 'glove' | 'both') ─────────────
+    this.inputMode = 'camera';
+
     // ── Adaptive cooldown ─────────────────────────────────────
     this._adaptiveCooldownUntil = 0;
 
@@ -184,6 +187,7 @@ var RecognitionController = (function() {
       // Dynamic prediction if motion detected and buffer ready
       if (self.dNN.trained && self._dynamicActive && self._frameBuffer.length >= 20) {
         var traj = self._trimmedBuffer();
+        self._frameBuffer   = []; // clear immediately so next gesture starts fresh
         self._dynamicActive = false;
         fetch('/api/nn/predict', {
           method: 'POST',
@@ -553,6 +557,7 @@ var RecognitionController = (function() {
         this.sentence.clearSpelling();
       }
       this.sentence.addWordFromGesture(name.toLowerCase(), name);
+      this.nlp.learnWord(name.toLowerCase()); // build personal vocab from confirmed gestures
       this.tts.speakIfAuto(name);
       // NLP debounce — wait before fetching
       this._scheduleNLP();

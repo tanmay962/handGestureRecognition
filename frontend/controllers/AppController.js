@@ -54,6 +54,7 @@ export class AppController {
 
     this.simFlex = [0,0,0,0,0];
     this.simIMU  = {ax:0,ay:0,az:0,gx:0,gy:0,gz:0};
+    this._cameraStarting = false;
 
     // Global state consumed by TrainView (no optional chaining needed)
     window._trainMeta      = {};

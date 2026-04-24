@@ -37,7 +37,7 @@ export class NLPService {
         sentenceModel.getLastWord(),
         sentenceModel.getContextString()
       );
-      if (ai) return ai;
+      if (ai && ai.length > 0) return ai;
     }
 
     // 2. Try gesture-aware personal backend suggestions

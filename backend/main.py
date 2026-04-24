@@ -96,7 +96,10 @@ async def push(event, data=None):
 
 
 class PredictionBuffer:
-    def __init__(self, window: int = 7, min_votes: int = 4):
+    # window=5, min_votes=3: requires 3/5 agreement — faster response than 4/7
+    # while still rejecting single-frame noise. Frontend ensemble handles the
+    # deeper temporal smoothing, so backend only needs to catch obvious jitter.
+    def __init__(self, window: int = 5, min_votes: int = 3):
         self.window    = window
         self.min_votes = min_votes
         self._buf: list = []

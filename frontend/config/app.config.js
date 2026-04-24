@@ -45,12 +45,12 @@ var APP_CONFIG = {
     ENSEMBLE_WINDOW:       5,
     // TTS word-queue buffer — words signed within this window are spoken as one phrase
     TTS_BUFFER_MS:         2000,
-    // Hysteresis — keep active gesture alive during brief dips
-    HYSTERESIS_EXIT:          0.40,
-    // Streak gate — frames before hold timer starts
-    MIN_STREAK_FRAMES:        2,
-    // Rejection zone
-    MIN_REJECT_CONF:          0.12,
+    // Hysteresis — keep active gesture alive during brief dips (raised from 0.40 to reduce false drops)
+    HYSTERESIS_EXIT:          0.50,
+    // Streak gate — require 3 consecutive same-gesture frames before starting hold timer
+    MIN_STREAK_FRAMES:        3,
+    // Rejection zone — discard anything below this confidence outright
+    MIN_REJECT_CONF:          0.15,
     // Dynamic priority margin
     DYNAMIC_PRIORITY_MARGIN:  0.05,
     // Prediction trail
