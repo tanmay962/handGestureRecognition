@@ -21,9 +21,9 @@ var SensorModel = (function() {
     if (!features || features.length < 41) return;
     this._fullVector  = features.slice(0, 41);
     this.flex         = features.slice(0, 5); // curls for finger bar display
-    this.handDetected = features[36] > 0.5 || features[37] > 0.5; // dom or aux present
-    this.handCount    = (features[36] > 0.5 ? 1 : 0) + (features[37] > 0.5 ? 1 : 0);
-    this.faceDetected = features[38] > 0.5;
+    this.handDetected = features[38] > 0.5 || features[39] > 0.5; // domPresent || auxPresent
+    this.handCount    = (features[38] > 0.5 ? 1 : 0) + (features[39] > 0.5 ? 1 : 0);
+    this.faceDetected = features[40] > 0.5;
     this.poseDetected = meta.poseDetected || false;
     this.source       = 'camera';
   };

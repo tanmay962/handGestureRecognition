@@ -61,11 +61,17 @@ export class TrainingController {
         body: JSON.stringify({ gesture:name, count:1, sample_type:'static', source:'camera' })
       });
       var data = await res.json();
-      sample   = data.samples[0];
+      sample   = data.samples && data.samples[0];
       // For simulated data, generate a mirrored version too
       if (data.mirrored && data.mirrored.length > 0) {
         mirroredSample = data.mirrored[0];
       }
+    }
+
+    // Guard: if no sample was produced (hand absent + simulation returned empty), bail out
+    if (!sample || !sample.length) {
+      eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0 });
+      return { live:false, sample:null, mirrored:false };
     }
 
     // Save original sample

@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-24T14:17:15.454Z
+// Built: 2026-04-24T16:22:24.918Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -752,9 +752,9 @@ var SensorModel = (function() {
     if (!features || features.length < 41) return;
     this._fullVector  = features.slice(0, 41);
     this.flex         = features.slice(0, 5); // curls for finger bar display
-    this.handDetected = features[36] > 0.5 || features[37] > 0.5; // dom or aux present
-    this.handCount    = (features[36] > 0.5 ? 1 : 0) + (features[37] > 0.5 ? 1 : 0);
-    this.faceDetected = features[38] > 0.5;
+    this.handDetected = features[38] > 0.5 || features[39] > 0.5; // domPresent || auxPresent
+    this.handCount    = (features[38] > 0.5 ? 1 : 0) + (features[39] > 0.5 ? 1 : 0);
+    this.faceDetected = features[40] > 0.5;
     this.poseDetected = meta.poseDetected || false;
     this.source       = 'camera';
   };
@@ -3848,11 +3848,17 @@ class TrainingController {
         body: JSON.stringify({ gesture:name, count:1, sample_type:'static', source:'camera' })
       });
       var data = await res.json();
-      sample   = data.samples[0];
+      sample   = data.samples && data.samples[0];
       // For simulated data, generate a mirrored version too
       if (data.mirrored && data.mirrored.length > 0) {
         mirroredSample = data.mirrored[0];
       }
+    }
+
+    // Guard: if no sample was produced (hand absent + simulation returned empty), bail out
+    if (!sample || !sample.length) {
+      eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0 });
+      return { live:false, sample:null, mirrored:false };
     }
 
     // Save original sample
