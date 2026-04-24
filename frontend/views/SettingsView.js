@@ -4,14 +4,13 @@
 function renderSettingsTab(state) {
   var tts       = state.tts       || { enabled: true, auto: false, rate: 1.0 };
   var confThresh = state.confThresh || 0.65;
-  var apiKey    = state.apiKey    || '';
   var apiStatus = state.apiStatus || 'none';
   var mqttConnected = state.mqttConnected || false;
   var mqttBroker    = state.mqttBroker    || '';
   var mqttTopic     = state.mqttTopic     || '';
 
   return (
-    _renderGeminiCard(apiKey, apiStatus) +
+    _renderGeminiCard(apiStatus) +
     _renderMQTTCard(mqttConnected, mqttBroker, mqttTopic) +
     _renderCameraCard(state.camActive) +
     _renderTTSCard(tts) +
@@ -21,22 +20,22 @@ function renderSettingsTab(state) {
   );
 }
 
-function _renderGeminiCard(apiKey, apiStatus) {
+function _renderGeminiCard(apiStatus) {
   var isConnected = apiStatus === 'ok';
   var borderColor = isConnected ? 'rgba(255,255,255,.15)' : 'transparent';
-  var gemFn = "(async function(){await window._app.connectGemini(document.getElementById('apiKeyInput').value)})()";
 
   return Card(
     'Gemini AI',
-    '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
-      'Next-word suggestions, grammar correction, sentence completion. ' +
-      'Get a free key at <span style="color:#ffffff">aistudio.google.com</span>.' +
+    '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:10px">' +
+      'Next-word suggestions, grammar correction and sentence completion — powered by Gemini.' +
     '</div>' +
-    '<div class="fr g6 mb8">' +
-      '<input class="inp f1" id="apiKeyInput" type="password" placeholder="Paste API key…" value="' + apiKey + '">' +
-      Btn(isConnected ? 'Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
-    '</div>' +
-    (isConnected ? '<div style="font-size:10px;color:#ffffff">Gemini is active</div>' : ''),
+    SettingRow(
+      isConnected ? 'Active' : 'Unavailable',
+      isConnected
+        ? 'Server-side key configured — all calls are proxied securely'
+        : 'Set GEMINI_API_KEY env var on the server to enable',
+      isConnected ? Badge('ON', 'g') : Badge('OFF', 'd')
+    ),
     'border-color:' + borderColor
   );
 }

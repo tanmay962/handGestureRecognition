@@ -171,12 +171,8 @@ export class AppController {
       }
     } catch(e) {}
 
-    // Load API key (user-stored key takes priority; server key is fallback)
-    try {
-      var kd = await (await fetch(API + '/settings/apiKey')).json();
-      if (kd.value) { var k = JSON.parse(kd.value); this.gemini.setApiKey(k); }
-    } catch(e) {}
-    // Try server-side Gemini key if user hasn't provided their own
+    // Check whether backend has a Gemini key available (env var or user-stored in DB).
+    // The key itself never comes to the browser — all Gemini calls are proxied.
     await this.gemini.loadServerKey();
 
     // Load conf threshold
@@ -642,16 +638,6 @@ export class AppController {
 
 
 
-  async connectGemini(key) {
-    var ok = await this.gemini.testConnection(key);
-    StorageService.saveApiKey(key);
-    fetch(API + '/settings', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({key: 'apiKey', value: JSON.stringify(key)})
-    }).catch(function(){});
-    this.view.render();
-    return ok;
-  }
 
   // ── Settings ──────────────────────────────────────────────────────────────
   setTTSEnabled(v)    { this.tts.enabled   = v; this.view.render(); }
@@ -738,7 +724,7 @@ export class AppController {
       sensor:          this.sensorModel,
       tts:             {enabled:this.tts.enabled, auto:this.tts.autoSpeak, rate:this.tts.rate},
       confThresh:      this.recogCtrl.confThresh,
-      apiKey:          StorageService.loadApiKey() || '',
+      apiKey:          '',  // key lives server-side only — never sent to browser
       apiStatus:       this.gemini.enabled ? 'ok' : 'off',
       mqttConnected:   this.mqttService.connected,
       mqttEnabled:     this.mqttService.enabled,

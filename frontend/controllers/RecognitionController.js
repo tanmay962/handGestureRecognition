@@ -543,7 +543,9 @@ var RecognitionController = (function() {
         suggestions: wordSuggs,
       });
       this._startAutoAccept();
-      this.tts.speakIfAuto(name);
+      // Do NOT speakIfAuto for individual letters — speak only when the word is confirmed
+      // (via auto-accept, dwell selection, or acceptWordSuggestion). This prevents
+      // "H E L L O" being spoken instead of "hello".
     } else {
       this.contextState = 'RECOGNIZING';
       if (this.sentence.getSpelling()) {
@@ -621,6 +623,8 @@ var RecognitionController = (function() {
 
   RecognitionController.prototype._executeSysGesture = function(action) {
     if (action === 'speak') {
+      // Learn from this sentence before speaking (builds personal NLP corpus)
+      this.sentence.acceptAndLearn(this.nlp);
       this.tts.speak(this.sentence.getSentence() || this.sentence.getDisplayText());
       eventBus.emit(Events.SYSTEM_GESTURE, { action: 'speak' });
     } else if (action === 'clear') {
@@ -690,6 +694,7 @@ var RecognitionController = (function() {
         var spelled = self.sentence.getSpelling();
         self.sentence.addWord(spelled);
         self.nlp.learnWord(spelled);
+        self.tts.speakIfAuto(spelled);
         self.sentence.clearSpelling();
       }
       eventBus.emit(Events.SENTENCE_UPDATED);

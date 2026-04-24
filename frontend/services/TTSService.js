@@ -14,7 +14,7 @@ export class TTSService {
     // Word-queue state
     this._wordQueue  = [];
     this._wordTimer  = null;
-    this._bufferMs   = (APP_CONFIG.RECOGNITION && APP_CONFIG.RECOGNITION.TTS_BUFFER_MS) || 1800;
+    this._bufferMs   = (APP_CONFIG.RECOGNITION && APP_CONFIG.RECOGNITION.TTS_BUFFER_MS) || 2000;
 
     var self = this;
 

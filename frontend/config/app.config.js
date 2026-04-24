@@ -43,8 +43,8 @@ var APP_CONFIG = {
     NLP_DEBOUNCE_MS:       300,
     // Ensemble voting
     ENSEMBLE_WINDOW:       5,
-    // TTS word-queue buffer
-    TTS_BUFFER_MS:         1500,
+    // TTS word-queue buffer — words signed within this window are spoken as one phrase
+    TTS_BUFFER_MS:         2000,
     // Hysteresis — keep active gesture alive during brief dips
     HYSTERESIS_EXIT:          0.40,
     // Streak gate — frames before hold timer starts

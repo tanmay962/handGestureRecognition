@@ -83,6 +83,7 @@ function _renderUserCamera(camActive, cameraError, trained, running) {
     (camActive
       ? '<button class="btn btn-r" onclick="window._app.stopCamera()">Stop Camera</button>'
       : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? 'Retry Camera' : 'Start Camera') + '</button>') +
+    (camActive ? '<button class="btn btn-o" onclick="window._app.switchCamera()">Flip Camera</button>' : '') +
     (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">' + cameraError + '</div>' : '') +
     (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">Recognize</button>' : '') +
     (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">Stop</button>' : '') +

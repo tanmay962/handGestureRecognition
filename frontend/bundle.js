@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-23T17:36:45.060Z
+// Built: 2026-04-24T14:17:15.454Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -20,8 +20,7 @@ var APP_CONFIG = {
     STATIC_HIDDEN:       [256, 128, 64],
     DYNAMIC_HIDDEN:      [256, 128, 64],
     LEARNING_RATE:       0.008,
-    TRAINING_EPOCHS:     500,
-    EPOCH_BATCH:         10,
+    TRAINING_EPOCHS:     200,
     SAMPLES_PER_GESTURE: 35,
     STATIC_INPUT:        41,
     DYNAMIC_INPUT:       1845,
@@ -52,8 +51,8 @@ var APP_CONFIG = {
     NLP_DEBOUNCE_MS:       300,
     // Ensemble voting
     ENSEMBLE_WINDOW:       5,
-    // TTS word-queue buffer
-    TTS_BUFFER_MS:         1500,
+    // TTS word-queue buffer — words signed within this window are spoken as one phrase
+    TTS_BUFFER_MS:         2000,
     // Hysteresis — keep active gesture alive during brief dips
     HYSTERESIS_EXIT:          0.40,
     // Streak gate — frames before hold timer starts
@@ -867,8 +866,10 @@ var CameraService = (function() {
 
     // Camera facing mode: 'user' (front) or 'environment' (back)
     this.facingMode = 'user';
-    // Current live prediction for canvas overlay
+    // Current live prediction for canvas overlay (dom hand)
     this._currentPrediction = null;
+    // Independent aux-hand prediction for canvas overlay
+    this._auxPrediction     = null;
     // Status text shown on canvas when no prediction is active
     this._statusText = null;
 
@@ -971,8 +972,9 @@ var CameraService = (function() {
   };
 
   // ── Set live prediction for canvas overlay ───────────────────
-  CameraService.prototype.setPrediction = function(name, conf, model) {
+  CameraService.prototype.setPrediction = function(name, conf, model, auxName, auxConf) {
     this._currentPrediction = name ? { name: name, conf: conf || 0, model: model || '' } : null;
+    this._auxPrediction = (auxName && auxConf > 0.3) ? { name: auxName, conf: auxConf || 0 } : null;
   };
 
   // ── Set status text shown when no prediction is active ───────
@@ -1371,41 +1373,59 @@ var CameraService = (function() {
     }
 
     // ── Prediction overlay drawn directly on canvas ───────────
-    if (this._currentPrediction) {
+    if (this._currentPrediction || this._auxPrediction) {
       var pred = this._currentPrediction;
+      var aux  = this._auxPrediction;
       var cw = canvas.width, ch = canvas.height;
       var nameFontSize = Math.min(60, Math.max(28, cw * 0.11));
       var confFontSize = Math.round(nameFontSize * 0.28);
+      var auxFontSize  = Math.round(nameFontSize * 0.55);
 
-      // Confidence brightness: dim at low confidence, full at high confidence
-      var alpha = Math.min(1, 0.35 + pred.conf * 0.65);
+      var alpha = pred ? Math.min(1, 0.35 + pred.conf * 0.65) : 0.5;
 
-      // Fade gradient at bottom so text is readable over any background
-      var bgGrad = ctx.createLinearGradient(0, ch * 0.58, 0, ch);
+      // Fade gradient — taller when aux label is also showing, normal otherwise
+      var gradStart = aux ? 0.50 : 0.58;
+      var bgGrad = ctx.createLinearGradient(0, ch * gradStart, 0, ch);
       bgGrad.addColorStop(0, 'rgba(6,8,13,0)');
       bgGrad.addColorStop(1, 'rgba(6,8,13,' + (0.88 * alpha) + ')');
       ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, ch * 0.58, cw, ch * 0.42);
+      ctx.fillRect(0, ch * gradStart, cw, ch * (1 - gradStart));
 
       ctx.save();
-      ctx.globalAlpha  = alpha;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'alphabetic';
 
-      // Gesture name — white with glow
-      ctx.font        = 'bold ' + nameFontSize + 'px "IBM Plex Mono",monospace';
-      ctx.shadowColor = 'rgba(0,0,0,0.95)';
-      ctx.shadowBlur  = 18;
-      ctx.fillStyle   = '#ffffff';
-      ctx.fillText(pred.name, cw / 2, ch - 30);
+      if (pred) {
+        ctx.globalAlpha = alpha;
+        // Dom gesture name
+        ctx.font        = 'bold ' + nameFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.shadowColor = 'rgba(0,0,0,0.95)';
+        ctx.shadowBlur  = 18;
+        ctx.fillStyle   = '#ffffff';
+        ctx.fillText(pred.name, cw / 2, ch - 30);
+        // Confidence + model tag
+        ctx.font      = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.fillStyle = 'rgba(220,224,236,0.80)';
+        ctx.shadowBlur = 6;
+        var confLabel = (pred.conf * 100).toFixed(1) + '%';
+        if (pred.model) confLabel += '  [' + pred.model + ']';
+        ctx.fillText(confLabel, cw / 2, ch - 8);
+      }
 
-      // Confidence + model tag
-      ctx.font        = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
-      ctx.fillStyle   = 'rgba(220,224,236,0.80)';
-      ctx.shadowBlur  = 6;
-      var confLabel   = (pred.conf * 100).toFixed(1) + '%';
-      if (pred.model) confLabel += '  [' + pred.model + ']';
-      ctx.fillText(confLabel, cw / 2, ch - 8);
+      // Aux-hand prediction — smaller badge above dom prediction
+      if (aux) {
+        var auxAlpha = Math.min(0.85, 0.3 + aux.conf * 0.55);
+        ctx.globalAlpha = auxAlpha;
+        ctx.font        = 'bold ' + auxFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.shadowColor = 'rgba(0,0,0,0.9)';
+        ctx.shadowBlur  = 10;
+        ctx.fillStyle   = 'rgba(180,220,255,0.9)'; // tinted blue to distinguish from dom
+        var auxY = pred ? ch - 30 - nameFontSize - 10 : ch - 30;
+        ctx.fillText(aux.name, cw / 2, auxY);
+        ctx.font      = 'bold ' + confFontSize + 'px "IBM Plex Mono",monospace';
+        ctx.fillStyle = 'rgba(160,200,240,0.70)';
+        ctx.fillText((aux.conf * 100).toFixed(1) + '% [aux]', cw / 2, auxY + confFontSize + 4);
+      }
 
       ctx.restore();
     }
@@ -1507,29 +1527,69 @@ var MQTTService = (function() {
 
 // ═══ services/GeminiService.js ═══
 // services/GeminiService.js
-class GeminiService{
-  constructor(){this.apiKey='';this.enabled=false}
-  setApiKey(k){this.apiKey=k.trim();this.enabled=this.apiKey.length>10}
-  async testConnection(k){
-    this.setApiKey(k);
-    try{const r=await this._call('Say OK',{maxOutputTokens:5});if(r!==null){eventBus.emit(Events.GEMINI_CONNECTED);return true}}catch{}
-    eventBus.emit(Events.GEMINI_ERROR);return false;
+// All Gemini calls are proxied through the backend — API key never touches the browser.
+var API = '/api/gemini';
+
+class GeminiService {
+  constructor() {
+    this.enabled = false;
+    this._checked = false;
   }
-  async getSuggestions(sentence,lastWord,context){
-    if(!this.enabled)return null;
-    const p=`You are a predictive text assistant for sign language. User builds sentences word by word.\nContext: "${context}"\nSentence: "${sentence||'(empty)'}"\n${lastWord?`Last word: "${lastWord}"`:''}
-Suggest exactly 5 next words. Respond ONLY with JSON array like ["w1","w2","w3","w4","w5"]`;
-    const t=await this._call(p,{temperature:.4,maxOutputTokens:50});return this._parseArr(t);
+
+  // Called once on init — asks backend whether a key is available (env or DB).
+  async loadServerKey() {
+    if (this._checked) return;
+    this._checked = true;
+    try {
+      var r = await fetch('/api/settings/gemini_key');
+      var d = await r.json();
+      if (d.available) {
+        this.enabled = true;
+        console.log('[Gemini] Server-side proxy ready');
+      }
+    } catch(e) {}
   }
-  async completeSentence(s){if(!this.enabled||!s)return null;return this._call(`Complete naturally: "${s}"\nReturn ONLY completed sentence, no quotes, under 10 words.`,{temperature:.3,maxOutputTokens:30})}
-  async correctGrammar(s){if(!this.enabled||!s)return null;return this._call(`Fix grammar: "${s}"\nReturn ONLY corrected sentence.`,{temperature:.1,maxOutputTokens:50})}
-  async _call(prompt,cfg={}){
-    if(!this.apiKey)return null;
-    try{const r=await fetch(`${APP_CONFIG.GEMINI.ENDPOINT}/${APP_CONFIG.GEMINI.MODEL}:generateContent?key=${this.apiKey}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:cfg.temperature||.4,maxOutputTokens:cfg.maxOutputTokens||50,topP:.8}})});
-      if(!r.ok)return null;const d=await r.json();return (d&&d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts&&d.candidates[0].content.parts[0]?d.candidates[0].content.parts[0].text.trim():null);
-    }catch(e){console.warn('[Gemini]',e);return null}
+
+  setApiKey(k) { /* key lives server-side only — no-op */ }
+
+  async getSuggestions(sentence, lastWord, context) {
+    if (!this.enabled) return null;
+    try {
+      var r = await fetch(API + '/suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sentence: sentence || '', last_word: lastWord || '', context: context || '' }),
+      });
+      var d = await r.json();
+      return d.suggestions || null;
+    } catch(e) { return null; }
   }
-  _parseArr(t){if(!t)return null;try{const m=t.replace(/```json|```/g,'').trim().match(/\[[\s\S]*?\]/);if(m){const p=JSON.parse(m[0]);if(Array.isArray(p)&&p.length)return p.slice(0,5).map(w=>String(w).toLowerCase())}}catch{}return null}
+
+  async completeSentence(s) {
+    if (!this.enabled || !s) return null;
+    try {
+      var r = await fetch(API + '/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sentence: s }),
+      });
+      var d = await r.json();
+      return d.completion || null;
+    } catch(e) { return null; }
+  }
+
+  async correctGrammar(s) {
+    if (!this.enabled || !s) return null;
+    try {
+      var r = await fetch(API + '/grammar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sentence: s }),
+      });
+      var d = await r.json();
+      return d.corrected || null;
+    } catch(e) { return null; }
+  }
 }
 
 
@@ -1539,9 +1599,24 @@ Suggest exactly 5 next words. Respond ONLY with JSON array like ["w1","w2","w3",
 // No optional-chaining — Safari 12 safe
 class NLPService {
   constructor(geminiService) {
-    this.gemini            = geminiService;
-    this._personalCorpusCount = 0;   // sentences learned so far
-    this._sentencesSinceRetrain = 0; // trigger retrain every N sentences
+    this.gemini               = geminiService;
+    this._personalCorpusCount    = 0;
+    this._sentencesSinceRetrain  = 0;
+    this._userVocab              = this._loadUserVocab(); // word → use-count
+  }
+
+  // ── User vocabulary (localStorage) ───────────────────────
+  _loadUserVocab() {
+    try { return JSON.parse(localStorage.getItem('nlp_user_vocab') || '{}'); } catch(e) { return {}; }
+  }
+  _saveUserVocab() {
+    try { localStorage.setItem('nlp_user_vocab', JSON.stringify(this._userVocab)); } catch(e) {}
+  }
+  learnWord(word) {
+    if (!word || word.length < 2) return;
+    var w = word.toLowerCase();
+    this._userVocab[w] = (this._userVocab[w] || 0) + 1;
+    this._saveUserVocab();
   }
 
   // ── Next-word suggestions ─────────────────────────────────────
@@ -1653,20 +1728,26 @@ class NLPService {
     try {
       var res = await fetch(API + '/nlp/word_suggestions', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ prefix: prefix })
+        body: JSON.stringify({ prefix: prefix, user_vocab: this._userVocab })
       });
       var data = await res.json();
       return data.suggestions || [];
     } catch(e) {
-      return [];
+      return this.getWordSuggestionsSync(prefix);
     }
   }
 
-  // Sync shim for inline use
+  // Sync shim — fallback and fast-path for inline use
   getWordSuggestionsSync(prefix) {
     if (!prefix) return [];
-    var COMMON = 'the,be,to,of,and,a,in,that,have,I,it,for,not,on,with,you,do,at,this,help,please,thank,yes,no,stop,go,sorry,hello,water,food,good,need,home,here,come,open,close'.split(',');
-    return COMMON.filter(function(w){ return w.startsWith(prefix.toLowerCase()) && w !== prefix.toLowerCase(); }).slice(0, 5);
+    var p    = prefix.toLowerCase();
+    var self = this;
+    var userMatches = Object.keys(this._userVocab)
+      .filter(function(w){ return w.startsWith(p) && w !== p; })
+      .sort(function(a, b){ return (self._userVocab[b] || 0) - (self._userVocab[a] || 0); });
+    var COMMON = 'the,be,to,of,and,a,in,that,have,I,it,for,not,on,with,you,do,at,this,help,please,thank,yes,no,stop,go,sorry,hello,water,food,good,need,home,here,come,open,close,am,are,is,hungry,tired,sick,happy,sad,pain,doctor,family,sleep,want,more,call'.split(',');
+    var base = COMMON.filter(function(w){ return w.toLowerCase().startsWith(p) && w.toLowerCase() !== p && userMatches.indexOf(w.toLowerCase()) === -1; });
+    return userMatches.concat(base).slice(0, 5);
   }
 
   getPersonalCorpusCount() { return this._personalCorpusCount; }
@@ -1690,7 +1771,7 @@ class TTSService {
     // Word-queue state
     this._wordQueue  = [];
     this._wordTimer  = null;
-    this._bufferMs   = (APP_CONFIG.RECOGNITION && APP_CONFIG.RECOGNITION.TTS_BUFFER_MS) || 1800;
+    this._bufferMs   = (APP_CONFIG.RECOGNITION && APP_CONFIG.RECOGNITION.TTS_BUFFER_MS) || 2000;
 
     var self = this;
 
@@ -2599,7 +2680,8 @@ function _card(name, meta, readiness, defaultType, isGuided) {
     '<div style="display:flex;gap:3px;justify-content:center">' +
     (isDyn
       ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Record</button>'
-      : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Capture</button>') +
+      : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">+1</button>' +
+        '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid rgba(255,255,255,0.25);border-radius:6px;cursor:pointer" onclick="window._app.addBulkSamples(\'' + esc(name) + '\',5)">×5</button>') +
     (count > 0
       ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">Del</button>'
       : '') +
@@ -2632,7 +2714,8 @@ function _wideCard(name, meta, readiness, isCustom) {
     '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + (ready ? 'Ready' : 'Need ' + needed) + '</span>' +
     '</div>' +
     '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
-    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Capture</button>' +
+    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">+1</button>' +
+    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid rgba(255,255,255,0.25);border-radius:6px;cursor:pointer" onclick="window._app.addBulkSamples(\'' + esc(name) + '\',5)">×5</button>' +
     '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Record</button>' +
     (sc + dc > 0
       ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">Delete</button>'
@@ -2647,14 +2730,13 @@ function _wideCard(name, meta, readiness, isCustom) {
 function renderSettingsTab(state) {
   var tts       = state.tts       || { enabled: true, auto: false, rate: 1.0 };
   var confThresh = state.confThresh || 0.65;
-  var apiKey    = state.apiKey    || '';
   var apiStatus = state.apiStatus || 'none';
   var mqttConnected = state.mqttConnected || false;
   var mqttBroker    = state.mqttBroker    || '';
   var mqttTopic     = state.mqttTopic     || '';
 
   return (
-    _renderGeminiCard(apiKey, apiStatus) +
+    _renderGeminiCard(apiStatus) +
     _renderMQTTCard(mqttConnected, mqttBroker, mqttTopic) +
     _renderCameraCard(state.camActive) +
     _renderTTSCard(tts) +
@@ -2664,22 +2746,22 @@ function renderSettingsTab(state) {
   );
 }
 
-function _renderGeminiCard(apiKey, apiStatus) {
+function _renderGeminiCard(apiStatus) {
   var isConnected = apiStatus === 'ok';
   var borderColor = isConnected ? 'rgba(255,255,255,.15)' : 'transparent';
-  var gemFn = "(async function(){await window._app.connectGemini(document.getElementById('apiKeyInput').value)})()";
 
   return Card(
     'Gemini AI',
-    '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:12px">' +
-      'Next-word suggestions, grammar correction, sentence completion. ' +
-      'Get a free key at <span style="color:#ffffff">aistudio.google.com</span>.' +
+    '<div style="font-size:11px;color:var(--mx);line-height:1.6;margin-bottom:10px">' +
+      'Next-word suggestions, grammar correction and sentence completion — powered by Gemini.' +
     '</div>' +
-    '<div class="fr g6 mb8">' +
-      '<input class="inp f1" id="apiKeyInput" type="password" placeholder="Paste API key…" value="' + apiKey + '">' +
-      Btn(isConnected ? 'Connected' : 'Connect', gemFn, isConnected ? 'g' : 'a') +
-    '</div>' +
-    (isConnected ? '<div style="font-size:10px;color:#ffffff">Gemini is active</div>' : ''),
+    SettingRow(
+      isConnected ? 'Active' : 'Unavailable',
+      isConnected
+        ? 'Server-side key configured — all calls are proxied securely'
+        : 'Set GEMINI_API_KEY env var on the server to enable',
+      isConnected ? Badge('ON', 'g') : Badge('OFF', 'd')
+    ),
     'border-color:' + borderColor
   );
 }
@@ -2856,6 +2938,10 @@ function _renderUserCamera(camActive, cameraError, trained, running) {
         '<div class="gesture-name" id="gestName"></div>' +
         '<div class="gesture-conf" id="gestConf"></div>' +
       '</div>' +
+      '<div class="vid-gesture" id="auxGestDisp" style="display:none;bottom:60px;font-size:0.75em;opacity:0.75">' +
+        '<div class="gesture-name" id="auxGestName" style="font-size:18px"></div>' +
+        '<div class="gesture-conf" id="auxGestConf"></div>' +
+      '</div>' +
       (!camActive ? '<div class="vid-overlay"><div style="font-size:11px;letter-spacing:.1em">TAP START</div></div>' : '') +
     '</div>' +
     '<div style="height:3px;background:var(--s2)"><div id="sysGestProg" style="height:100%;width:0%;background:var(--g);transition:width .1s"></div></div>' +
@@ -2865,6 +2951,7 @@ function _renderUserCamera(camActive, cameraError, trained, running) {
     (camActive
       ? '<button class="btn btn-r" onclick="window._app.stopCamera()">Stop Camera</button>'
       : '<button class="btn btn-o" onclick="window._app.startCamera()">' + (cameraError ? 'Retry Camera' : 'Start Camera') + '</button>') +
+    (camActive ? '<button class="btn btn-o" onclick="window._app.switchCamera()">Flip Camera</button>' : '') +
     (cameraError ? '<div style="font-size:10px;color:var(--r);padding:7px 12px;background:var(--rD);border-radius:8px;border:1px solid var(--r)">' + cameraError + '</div>' : '') +
     (trained && !running ? '<button class="btn btn-g" onclick="window._app.startRecognition()">Recognize</button>' : '') +
     (running ? '<button class="btn btn-r" onclick="window._app.stopRecognition()">Stop</button>' : '') +
@@ -2990,6 +3077,15 @@ var RecognitionController = (function() {
     // ── Adaptive cooldown ─────────────────────────────────────
     this._adaptiveCooldownUntil = 0;
 
+    // ── Aux-hand independent tracking (word-level gestures only) ─
+    this._streakNameAux      = null;
+    this._streakCountAux     = 0;
+    this._stableNameAux      = null;
+    this._stableStartTimeAux = null;
+    this._lastConfTimeAux    = 0;
+    this._probHistoryAux     = [];
+    this._auxPrediction      = null; // { name, conf } for live display
+
     // ── NLP debounce ─────────────────────────────────────────
     this._nlpTimer = null;
 
@@ -3025,6 +3121,7 @@ var RecognitionController = (function() {
   RecognitionController.prototype.stop = function() {
     this.running = false;
     this.contextState = 'IDLE';
+    this._clearAuxPrediction();
     eventBus.emit(Events.RECOG_STOPPED);
   };
 
@@ -3065,23 +3162,37 @@ var RecognitionController = (function() {
       this._frameBuffer.shift();
     }
 
+    // Build aux-swapped feature vector when aux hand is present (features[39] = auxPresent)
+    var auxSwapped = this._buildAuxSwapped(features);
+
     // Static prediction
     if (!this.sNN.trained) return;
     this._predictPending = true;
     fetch('/api/nn/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ features: features, model_type: 'static' }),
+      body: JSON.stringify({ features: features, aux_features: auxSwapped || [], model_type: 'static' }),
     }).then(function(r) {
       return r.json();
     }).then(function(staticResult) {
       // Ensemble: average last N probability vectors, take argmax of the mean
       var ensembled = self._ensembleVote(staticResult);
 
+      // Handle aux-hand result independently
+      if (staticResult.aux) {
+        self._handleAuxResult(staticResult.aux);
+      } else {
+        self._clearAuxPrediction();
+      }
+
       // Broadcast live prediction to canvas overlay on every frame
       if (ensembled && ensembled.name && ensembled.conf > 0.25) {
         eventBus.emit(Events.GESTURE_PREDICTING, {
-          gesture: ensembled.name, conf: ensembled.conf, model: 'static'
+          gesture:    ensembled.name,
+          conf:       ensembled.conf,
+          model:      'static',
+          auxGesture: self._auxPrediction ? self._auxPrediction.name : null,
+          auxConf:    self._auxPrediction ? self._auxPrediction.conf : 0,
         });
       }
 
@@ -3113,6 +3224,116 @@ var RecognitionController = (function() {
     }).catch(function() { self._predictPending = false; });
 
     this._lastFeatures = features.slice();
+  };
+
+  // ── Aux-hand feature swap ────────────────────────────────
+  // Moves aux hand features (11-21) into dom slot (0-10), zeros dom slot.
+  // Result: model predicts what the *left* hand is doing, independently.
+  RecognitionController.prototype._buildAuxSwapped = function(features) {
+    if (!features || !features[39]) return null; // no aux hand present
+    var v = features.slice();
+    for (var i = 0; i < 11; i++) {
+      v[i]      = features[i + 11]; // aux → dom slot
+      v[i + 11] = 0;                // clear aux slot
+    }
+    v[38] = features[39]; // auxPresent → domPresent flag
+    v[39] = 0;
+    return v;
+  };
+
+  // ── Aux-hand ensemble (mirrors _ensembleVote but uses separate history) ─
+  RecognitionController.prototype._ensembleAux = function(result) {
+    if (!result || !result.probs || result.probs.length === 0) return result;
+    this._probHistoryAux.push({ probs: result.probs.slice() });
+    if (this._probHistoryAux.length > this._ensembleWindow) this._probHistoryAux.shift();
+    if (this._probHistoryAux.length < 2) return result;
+
+    var n = result.probs.length;
+    var avg = new Array(n).fill(0);
+    for (var h = 0; h < this._probHistoryAux.length; h++) {
+      var pv = this._probHistoryAux[h].probs;
+      for (var j = 0; j < n && j < pv.length; j++) avg[j] += pv[j] / this._probHistoryAux.length;
+    }
+    var bestIdx = 0, bestConf = 0;
+    for (var k = 0; k < avg.length; k++) {
+      if (avg[k] > bestConf) { bestConf = avg[k]; bestIdx = k; }
+    }
+    var bestName = (this.sNN && this.sNN.getName) ? this.sNN.getName(bestIdx) : result.name;
+    if (!bestName || bestName === 'Unknown') bestName = result.name;
+    return { name: bestName, conf: bestConf, idx: bestIdx, probs: avg };
+  };
+
+  // ── Aux-hand prediction handler ──────────────────────────
+  // Aux hand fires word-level gestures only — letters stay on dom hand
+  // to avoid collision with ongoing spelling.
+  RecognitionController.prototype._handleAuxResult = function(result) {
+    var ensembled = this._ensembleAux(result);
+    var isLetterOrDigit = ensembled.name && ensembled.name.length === 1 && /[A-Z0-9]/.test(ensembled.name);
+
+    if (!ensembled || ensembled.conf < this.confThresh || ensembled.below_threshold || isLetterOrDigit) {
+      this._clearAuxPrediction();
+      return;
+    }
+
+    // Update live display (shown on canvas + DOM badge)
+    this._auxPrediction = { name: ensembled.name, conf: ensembled.conf };
+    this._updateAuxDisplay(ensembled.name, ensembled.conf);
+
+    // Streak gate
+    if (ensembled.name === this._streakNameAux) {
+      this._streakCountAux++;
+    } else {
+      this._streakNameAux      = ensembled.name;
+      this._streakCountAux     = 1;
+      this._stableNameAux      = null;
+      this._stableStartTimeAux = null;
+    }
+    var minStreak = APP_CONFIG.RECOGNITION.MIN_STREAK_FRAMES || 2;
+    if (this._streakCountAux < minStreak) return;
+
+    // Time-based stability
+    var now = Date.now();
+    if (ensembled.name === this._stableNameAux) {
+      if (!this._stableStartTimeAux) this._stableStartTimeAux = now;
+      if (now - this._stableStartTimeAux >= APP_CONFIG.RECOGNITION.STABLE_MS_WORD) {
+        if (now - this._lastConfTimeAux >= APP_CONFIG.RECOGNITION.COOLDOWN_WORD) {
+          this._lastConfTimeAux    = now;
+          this._stableStartTimeAux = null;
+          this._streakCountAux     = 0;
+          this._onGestureConfirmed(ensembled.name, ensembled.conf, 'aux-hand');
+        }
+      }
+    } else {
+      this._stableNameAux      = ensembled.name;
+      this._stableStartTimeAux = now;
+    }
+  };
+
+  RecognitionController.prototype._clearAuxPrediction = function() {
+    if (this._auxPrediction) {
+      this._auxPrediction      = null;
+      this._stableNameAux      = null;
+      this._stableStartTimeAux = null;
+      this._streakNameAux      = null;
+      this._streakCountAux     = 0;
+      this._probHistoryAux     = [];
+      this._updateAuxDisplay(null, 0);
+    }
+  };
+
+  RecognitionController.prototype._updateAuxDisplay = function(name, conf) {
+    var el = document.getElementById('auxGestDisp');
+    var en = document.getElementById('auxGestName');
+    var ec = document.getElementById('auxGestConf');
+    if (!el) return;
+    if (!name) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    el.style.opacity = (0.4 + conf * 0.6).toFixed(2);
+    if (en) en.textContent = name;
+    if (ec) ec.textContent = (conf * 100).toFixed(1) + '% [aux]';
   };
 
   // ── Probability-vector ensemble ──────────────────────────
@@ -3330,14 +3551,16 @@ var RecognitionController = (function() {
       this.contextState = 'SPELLING';
       this.sentence.addLetter(name);
       this._lastLetterTime = Date.now();
-      var wordSuggs = this.nlp.getWordSuggestions(this.sentence.getSpelling());
+      var wordSuggs = this.nlp.getWordSuggestionsSync(this.sentence.getSpelling());
       this.sentence.setWordSuggestions(wordSuggs);
       eventBus.emit(Events.SPELLING_UPDATED, {
         spelling: this.sentence.getSpelling(),
         suggestions: wordSuggs,
       });
       this._startAutoAccept();
-      this.tts.speakIfAuto(name);
+      // Do NOT speakIfAuto for individual letters — speak only when the word is confirmed
+      // (via auto-accept, dwell selection, or acceptWordSuggestion). This prevents
+      // "H E L L O" being spoken instead of "hello".
     } else {
       this.contextState = 'RECOGNIZING';
       if (this.sentence.getSpelling()) {
@@ -3415,6 +3638,8 @@ var RecognitionController = (function() {
 
   RecognitionController.prototype._executeSysGesture = function(action) {
     if (action === 'speak') {
+      // Learn from this sentence before speaking (builds personal NLP corpus)
+      this.sentence.acceptAndLearn(this.nlp);
       this.tts.speak(this.sentence.getSentence() || this.sentence.getDisplayText());
       eventBus.emit(Events.SYSTEM_GESTURE, { action: 'speak' });
     } else if (action === 'clear') {
@@ -3456,12 +3681,14 @@ var RecognitionController = (function() {
     if (this.sentence.wordSuggestions.length > 0 && index < this.sentence.wordSuggestions.length) {
       var word = this.sentence.wordSuggestions[index];
       this.sentence.acceptWordSuggestion(word);
+      this.nlp.learnWord(word);
       this.tts.speakIfAuto(word);
       eventBus.emit(Events.SUGGESTION_SELECTED, { word: word, index: index });
       eventBus.emit(Events.SENTENCE_UPDATED);
     } else if (this.sentence.suggestions.length > 0 && index < this.sentence.suggestions.length) {
       var w = this.sentence.suggestions[index];
       this.sentence.addWord(w);
+      this.nlp.learnWord(w);
       this.tts.speakIfAuto(w);
       eventBus.emit(Events.SUGGESTION_SELECTED, { word: w, index: index });
       eventBus.emit(Events.SENTENCE_UPDATED);
@@ -3476,9 +3703,13 @@ var RecognitionController = (function() {
       if (self.sentence.getSpelling() && self.sentence.wordSuggestions.length > 0) {
         var top = self.sentence.wordSuggestions[0];
         self.sentence.acceptWordSuggestion(top);
+        self.nlp.learnWord(top);
         self.tts.speakIfAuto(top);
       } else if (self.sentence.getSpelling()) {
-        self.sentence.addWord(self.sentence.getSpelling());
+        var spelled = self.sentence.getSpelling();
+        self.sentence.addWord(spelled);
+        self.nlp.learnWord(spelled);
+        self.tts.speakIfAuto(spelled);
         self.sentence.clearSpelling();
       }
       eventBus.emit(Events.SENTENCE_UPDATED);
@@ -3660,6 +3891,16 @@ class TrainingController {
 
   async collectStaticSamples(name, count) { return this.collectLiveBurst(name, count || 5); }
 
+  // ── Bulk capture (one countdown, N samples spaced 350ms apart) ───────
+  async collectBulkStatic(name, count) {
+    count = count || 5;
+    await this.runCountdown(3);
+    for (var i = 0; i < count; i++) {
+      await this.collectStaticSample(name, true);
+      if (i < count - 1) await new Promise(function(r){ setTimeout(r, 350); });
+    }
+  }
+
   // ── Dynamic recording — with abort on hand loss ───────────────
   startDynamicRecording(name) {
     this._dynLostFrames = 0;
@@ -3770,41 +4011,33 @@ class TrainingController {
       })
     });
 
-    // ── Train unified BiLSTM ──────────────────────────────────────────────
-    // Use dynamic-style hyper-params when motion data exists; fall back to
-    // static-style (more epochs, higher lr) when only static samples present.
-    var EPOCHS = (dd.inputs.length > 0) ? 400 : APP_CONFIG.NN.TRAINING_EPOCHS;
-    var BATCH  = (dd.inputs.length > 0) ? 15  : APP_CONFIG.NN.EPOCH_BATCH;
+    // ── Train unified BiLSTM — single call, backend handles SWA + warmup ────
+    var EPOCHS = APP_CONFIG.NN.TRAINING_EPOCHS;
     var lr     = (dd.inputs.length > 0) ? 0.001 : 0.008;
 
-    for (var ep = 0; ep < EPOCHS; ep += BATCH) {
-      await new Promise(function(r){ setTimeout(r, 4); });
-      var ep2  = Math.min(BATCH, EPOCHS - ep);
-      var res  = await fetch(API + '/nn/train', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:ep2, lr:lr })
-      });
-      var data = await res.json();
+    // Progress updates come via WebSocket train_progress events (handled in AppController).
+    // A single fetch lets the backend run the full training pipeline uninterrupted.
+    var res  = await fetch(API + '/nn/train', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:EPOCHS, lr:lr })
+    });
+    var data = await res.json();
 
-      // Mirror stats to both frontend NN objects so views remain consistent
-      this.staticNN.accuracy      = data.accuracy;
-      this.staticNN.val_accuracy  = data.val_accuracy || 0;
-      this.staticNN.loss          = data.loss;
-      this.staticNN.epochs        = data.epochs;
-      this.staticNN.trained       = true;
-      this.dynamicNN.accuracy     = data.accuracy;
-      this.dynamicNN.val_accuracy = data.val_accuracy || 0;
-      this.dynamicNN.loss         = data.loss;
-      this.dynamicNN.epochs       = data.epochs;
-      this.dynamicNN.trained      = true;
+    // Mirror final stats to both frontend NN objects
+    this.staticNN.accuracy      = data.accuracy;
+    this.staticNN.val_accuracy  = data.val_accuracy || 0;
+    this.staticNN.loss          = data.loss;
+    this.staticNN.epochs        = data.epochs;
+    this.staticNN.trained       = true;
+    this.dynamicNN.accuracy     = data.accuracy;
+    this.dynamicNN.val_accuracy = data.val_accuracy || 0;
+    this.dynamicNN.loss         = data.loss;
+    this.dynamicNN.epochs       = data.epochs;
+    this.dynamicNN.trained      = true;
 
-      if (!window._perGestAcc) window._perGestAcc = {};
-      window._perGestAcc.static  = data.per_gesture_acc || {};
-      window._perGestAcc.dynamic = data.per_gesture_acc || {};
-
-      this.progress = ((ep + ep2) / EPOCHS) * 100;
-      eventBus.emit(Events.TRAIN_PROGRESS, { progress:this.progress, model:'unified', accuracy:data.accuracy });
-    }
+    if (!window._perGestAcc) window._perGestAcc = {};
+    window._perGestAcc.static  = data.per_gesture_acc || {};
+    window._perGestAcc.dynamic = data.per_gesture_acc || {};
 
     await fetch(API + '/nn/save/unified?source=' + (window._trainSource||'camera'), { method:'POST' });
 
@@ -3924,7 +4157,7 @@ class AppController {
     });
     // Live prediction → camera canvas overlay + top-3 histogram DOM update
     eventBus.on(Events.GESTURE_PREDICTING, function(d) {
-      self.camera.setPrediction(d.gesture || null, d.conf || 0, d.model || '');
+      self.camera.setPrediction(d.gesture || null, d.conf || 0, d.model || '', d.auxGesture || null, d.auxConf || 0);
       // Update top-3 confidence histogram directly in DOM (no full re-render needed)
       var top3 = self.recogCtrl._topPredictions || [];
       for (var i = 0; i < 3; i++) {
@@ -4015,11 +4248,9 @@ class AppController {
       }
     } catch(e) {}
 
-    // Load API key
-    try {
-      var kd = await (await fetch(API + '/settings/apiKey')).json();
-      if (kd.value) { var k = JSON.parse(kd.value); this.gemini.setApiKey(k); }
-    } catch(e) {}
+    // Check whether backend has a Gemini key available (env var or user-stored in DB).
+    // The key itself never comes to the browser — all Gemini calls are proxied.
+    await this.gemini.loadServerKey();
 
     // Load conf threshold
     try {
@@ -4043,15 +4274,22 @@ class AppController {
     // WebSocket handlers
     var self = this;
     wsClient.on('train_progress', function(d) {
-      if (d.model === 'static' || d.model === 'unified') {
-        self.staticNN.accuracy = d.accuracy; self.staticNN.loss = d.loss;
-        self.staticNN.epochs = d.epochs; self.staticNN.trained = true;
-        if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.static = d.per_gesture_acc; }
+      // Update live progress bar via trainCtrl so TrainView reflects it
+      if (d.progress_pct !== undefined && self.trainCtrl.isTraining) {
+        self.trainCtrl.progress = d.progress_pct;
       }
-      if (d.model === 'dynamic' || d.model === 'unified') {
-        self.dynamicNN.accuracy = d.accuracy; self.dynamicNN.loss = d.loss;
-        self.dynamicNN.epochs = d.epochs; self.dynamicNN.trained = true;
-        if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.dynamic = d.per_gesture_acc; }
+      // Final completion event carries accuracy/loss/epochs
+      if (d.complete) {
+        if (d.model === 'static' || d.model === 'unified') {
+          self.staticNN.accuracy = d.accuracy; self.staticNN.loss = d.loss;
+          self.staticNN.epochs = d.epochs; self.staticNN.trained = true;
+          if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.static = d.per_gesture_acc; }
+        }
+        if (d.model === 'dynamic' || d.model === 'unified') {
+          self.dynamicNN.accuracy = d.accuracy; self.dynamicNN.loss = d.loss;
+          self.dynamicNN.epochs = d.epochs; self.dynamicNN.trained = true;
+          if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.dynamic = d.per_gesture_acc; }
+        }
       }
       eventBus.emit(Events.TRAIN_PROGRESS, d);
     });
@@ -4312,6 +4550,25 @@ class AppController {
     }
   }
 
+  async addBulkSamples(name, count) {
+    var self = this;
+    var statusEl = document.getElementById('trainStatus');
+    function showStatus(msg, color) {
+      if (!statusEl) return;
+      statusEl.style.display = 'block';
+      statusEl.textContent   = msg;
+      statusEl.style.background = color;
+      statusEl.style.color   = 'var(--bg)';
+      clearTimeout(statusEl._t);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 3000);
+    }
+    showStatus('⏳ Get ready — capturing ' + count + '× "' + name + '" in 3s…', 'var(--a)');
+    await this.trainCtrl.collectBulkStatic(name, count);
+    showStatus('✓ ' + count + ' samples captured for "' + name + '"', 'var(--g)');
+    await this._refreshTrainMeta();
+    this.view.render();
+  }
+
   // ── Gesture management ────────────────────────────────────────────────────
   addGesture(name)    { this.trainCtrl.addGesture(name);    this.view.render(); }
   removeGesture(name) { this.trainCtrl.removeGesture(name); this.view.render(); }
@@ -4388,7 +4645,7 @@ class AppController {
       self.view.render();
       await new Promise(function(r){ setTimeout(r, 400); });
       if (!DYN[name]) {
-        await self.addSample(name, 'static');
+        await self.addBulkSamples(name, 5);
       }
       await new Promise(function(r){ setTimeout(r, 200); });
     }
@@ -4458,16 +4715,6 @@ class AppController {
 
 
 
-  async connectGemini(key) {
-    var ok = await this.gemini.testConnection(key);
-    StorageService.saveApiKey(key);
-    fetch(API + '/settings', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({key: 'apiKey', value: JSON.stringify(key)})
-    }).catch(function(){});
-    this.view.render();
-    return ok;
-  }
 
   // ── Settings ──────────────────────────────────────────────────────────────
   setTTSEnabled(v)    { this.tts.enabled   = v; this.view.render(); }
@@ -4554,7 +4801,7 @@ class AppController {
       sensor:          this.sensorModel,
       tts:             {enabled:this.tts.enabled, auto:this.tts.autoSpeak, rate:this.tts.rate},
       confThresh:      this.recogCtrl.confThresh,
-      apiKey:          StorageService.loadApiKey() || '',
+      apiKey:          '',  // key lives server-side only — never sent to browser
       apiStatus:       this.gemini.enabled ? 'ok' : 'off',
       mqttConnected:   this.mqttService.connected,
       mqttEnabled:     this.mqttService.enabled,
