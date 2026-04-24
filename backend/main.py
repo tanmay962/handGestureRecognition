@@ -9,14 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# Our modules
 from database import (
-    DB_PATH, GESTURE_TEMPLATES, DEFAULT_GESTURES,
     STATIC_FEATURES, DYNAMIC_FEATURES, DYNAMIC_FRAMES,
     MIN_STATIC_SAMPLES, MIN_DYNAMIC_SAMPLES,
     get_db, init_db, log_session, score_sample_quality,
@@ -46,29 +44,24 @@ except Exception:
 FRONTEND = Path(__file__).parent.parent / "frontend"
 MP_MODEL  = Path(__file__).parent / "hand_landmarker.task"
 
+unified_nn      = UnifiedLSTMModel()
+_conf_threshold = 0.65
+_train_lock     = asyncio.Lock()
+sentence_state  = SentenceState()
 
-#  Global model instance — single bidirectional LSTM for all gestures
+_ADMIN_PIN       = os.environ.get("ADMIN_PIN", "").strip()
+_GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "").strip()
+_AUTO_RETRAIN_EVERY = int(os.environ.get("AUTO_RETRAIN_EVERY", "10"))
 
-unified_nn          = UnifiedLSTMModel()
-_conf_threshold     = 0.65
-
-_train_lock = asyncio.Lock()
-
-sentence_state = SentenceState()
-
-
-#  Admin auth 
-
-_ADMIN_PIN = os.environ.get("ADMIN_PIN", "").strip()
 if not _ADMIN_PIN:
     print("[WARN] ADMIN_PIN not set — destructive endpoints are unprotected.")
+if _GEMINI_API_KEY:
+    print("[Gemini] Server-side API key loaded from GEMINI_API_KEY env var.")
 
 def require_admin(x_admin_pin: str = Header(default="")):
     if _ADMIN_PIN and x_admin_pin != _ADMIN_PIN:
         raise HTTPException(status_code=401, detail="Invalid or missing admin PIN")
 
-
-#  WebSocket manager 
 
 class ConnectionManager:
     def __init__(self):
@@ -99,12 +92,10 @@ async def push(event, data=None):
 
 
 class PredictionBuffer:
-    """Rolling majority-vote smoother — stabilises live gesture predictions."""
-
     def __init__(self, window: int = 7, min_votes: int = 4):
         self.window    = window
         self.min_votes = min_votes
-        self._buf: list = []   # [(name, conf), ...]
+        self._buf: list = []
 
     def push(self, name: str, conf: float):
         self._buf.append((name, conf))
@@ -112,8 +103,6 @@ class PredictionBuffer:
             self._buf.pop(0)
 
     def smooth(self, raw: dict) -> dict:
-        """Return a smoothed copy of *raw*.
-        Sets below_threshold=True when the buffer hasn't converged on a stable gesture."""
         if not self._buf:
             return raw
         names = [n for n, _ in self._buf]
@@ -129,10 +118,10 @@ class PredictionBuffer:
 
 
 _pred_buffer        = PredictionBuffer()
-_gesture_thresholds: dict = {}   # per-gesture override; falls back to _conf_threshold
+_gesture_thresholds: dict = {}
 
 
-#  MediaPipe (server-side, optional)
+# MediaPipe (optional, server-side)
 
 _mp_ready      = False
 _mp_landmarker = None
@@ -188,15 +177,15 @@ def _landmarks_to_features(lm):
     sz = lm[17].z - lm[5].z
     ls = math.sqrt(sx**2 + sy**2 + sz**2) or 0.001
 
-    dom   = curls + hd + [sx/ls * 0.1, sy/ls * 0.1, sz/ls * 0.1]  # 11 features
-    aux   = [0.0] * 11   # auxiliary hand not detected server-side
-    face  = [0.0] * 10   # face features not extracted server-side
-    pose  = [0.0] * 6    # pose features not extracted server-side
-    flags = [1.0, 0.0, 0.0]  # dom_present, aux_absent, face_absent
+    dom   = curls + hd + [sx/ls * 0.1, sy/ls * 0.1, sz/ls * 0.1]
+    aux   = [0.0] * 11
+    face  = [0.0] * 10
+    pose  = [0.0] * 6
+    flags = [1.0, 0.0, 0.0]
     return (dom + aux + face + pose + flags)[:STATIC_FEATURES]
 
 
-#  MQTT subscriber 
+# MQTT subscriber
 
 _mqtt_enabled = False
 _mqtt_client  = None
@@ -218,7 +207,6 @@ def _mqtt_on_disconnect(client, userdata, disconnect_flags, reason_code, propert
 
 
 def _mqtt_on_message(client, userdata, msg):
-    """Predict from a glove/sensor payload and broadcast the result over WebSocket."""
     global _mqtt_loop
     try:
         payload    = json.loads(msg.payload.decode())
@@ -293,7 +281,7 @@ def start_mqtt_subscriber():
         _mqtt_enabled = False
 
 
-#  App lifespan
+# App lifespan
 
 @asynccontextmanager
 async def lifespan(app):
@@ -316,8 +304,6 @@ async def lifespan(app):
             if gesture:
                 _gesture_thresholds[gesture] = float(r['value'])
 
-        # Auto-load the most recently saved unified model so predictions work
-        # immediately after a server restart without any frontend action
         model_row = db.execute(
             "SELECT data FROM models WHERE id LIKE 'unified_%' ORDER BY updated_at DESC LIMIT 1"
         ).fetchone()
@@ -347,7 +333,7 @@ async def lifespan(app):
         print("[MQTT] Disconnected")
 
 
-#  FastAPI app 
+# App setup
 
 app = FastAPI(title="Gesture Detection v1.0", lifespan=lifespan)
 
@@ -364,7 +350,7 @@ app.add_middleware(
 )
 
 
-#  Request models (Pydantic) 
+# Request models
 
 class NNInitRequest(BaseModel):
     model_type:     str
@@ -426,7 +412,73 @@ class PredLogRequest(BaseModel):
     model_type: str
 
 
-#  Routes 
+# Auto-retrain helper
+
+async def _do_auto_retrain():
+    """Load all DB samples, retrain, and save. Runs as a background task."""
+    if _train_lock.locked():
+        return
+
+    with get_db() as db:
+        gestures = [r['name'] for r in db.execute(
+            "SELECT name FROM gesture_registry ORDER BY name"
+        )]
+        if not gestures:
+            return
+        gesture_types = {r['name']: r['gesture_type'] for r in db.execute(
+            "SELECT name, gesture_type FROM gesture_registry"
+        )}
+        gesture_idx = {name: i for i, name in enumerate(gestures)}
+
+        all_inputs, all_labels = [], []
+        for row in db.execute(
+            "SELECT gesture, sample FROM static_samples WHERE quality >= 0.3"
+        ):
+            g = row['gesture']
+            if g in gesture_idx:
+                all_inputs.append(json.loads(row['sample']))
+                all_labels.append(gesture_idx[g])
+        for row in db.execute(
+            "SELECT gesture, frames FROM dynamic_samples WHERE quality >= 0.3"
+        ):
+            g = row['gesture']
+            if g in gesture_idx:
+                all_inputs.append(json.loads(row['frames']))
+                all_labels.append(gesture_idx[g])
+
+    if not all_inputs:
+        return
+
+    await push("train_progress", {"model": "unified", "progress_pct": 0, "complete": False, "auto": True})
+    unified_nn.initialize(len(gestures), gestures, gesture_types)
+
+    async with _train_lock:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: unified_nn.train_batch(all_inputs, all_labels, 200, 0.001),
+        )
+
+    with get_db() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO models(id,data,source,updated_at) VALUES(?,?,?,?)",
+            ('unified_camera', json.dumps(unified_nn.to_json()), 'camera', time.time()),
+        )
+    await push("train_progress", {
+        "model":           "unified",
+        "accuracy":        unified_nn.accuracy,
+        "val_accuracy":    unified_nn.val_accuracy,
+        "loss":            unified_nn.loss,
+        "epochs":          unified_nn.epochs,
+        "per_gesture_acc": unified_nn.per_gesture_acc,
+        "progress_pct":    100,
+        "complete":        True,
+        "auto":            True,
+    })
+    log_session("auto_retrain", detail=f"acc={unified_nn.accuracy:.3f}")
+
+
+# Routes
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -455,7 +507,7 @@ async def ws_endpoint(ws: WebSocket):
         manager.disconnect(ws)
 
 
-# -- Neural Network --
+# Neural network
 
 @app.post("/api/nn/init")
 def nn_init(req: NNInitRequest):
@@ -472,7 +524,6 @@ async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
     _loop = asyncio.get_running_loop()
 
     def _progress(stats):
-        """Called from the executor thread — safely pushes progress via WebSocket."""
         asyncio.run_coroutine_threadsafe(
             push("train_progress", {
                 "model":        req.model_type,
@@ -486,7 +537,6 @@ async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
             _loop,
         )
 
-    # run_in_executor keeps the event loop responsive during the blocking PyTorch work
     async with _train_lock:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
@@ -494,7 +544,6 @@ async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
             lambda: unified_nn.train_batch(req.inputs, req.labels, req.epochs, req.lr, _progress),
         )
 
-    # Final complete push — frontend uses complete:true to stop the progress bar
     await push("train_progress", {
         "model":           req.model_type,
         "accuracy":        unified_nn.accuracy,
@@ -519,14 +568,11 @@ def nn_predict(req: PredictRequest):
     if not unified_nn.trained:
         return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": True}
 
-    # Get raw prediction without threshold so smoother sees all candidates
     raw = unified_nn.predict(req.features, conf_threshold=0.0)
 
-    # Apply per-gesture threshold (falls back to global)
     threshold = _gesture_thresholds.get(raw["name"], _conf_threshold)
     raw["below_threshold"] = raw["conf"] < threshold
 
-    # Feed into rolling smoother and return stabilised prediction
     _pred_buffer.push(raw["name"], raw["conf"])
     result = _pred_buffer.smooth(raw)
 
@@ -605,7 +651,7 @@ def per_gesture_accuracy():
     return {"static": unified_nn.per_gesture_acc, "dynamic": unified_nn.per_gesture_acc}
 
 
-# -- Confidence threshold --
+# Confidence threshold
 
 @app.post("/api/settings/conf_threshold")
 def set_conf_threshold(req: ConfThresholdRequest):
@@ -623,7 +669,7 @@ def get_conf_threshold():
     return {"threshold": _conf_threshold}
 
 
-# -- Samples --
+# Samples
 
 @app.post("/api/samples/simulate")
 def api_simulate(req: SimulateRequest):
@@ -641,7 +687,7 @@ def api_simulate(req: SimulateRequest):
         return {"gesture": req.gesture, "samples": samples, "mirrored": [], "count": len(samples)}
 
 @app.post("/api/samples/save")
-def save_samples(req: SampleSaveRequest):
+async def save_samples(req: SampleSaveRequest, background_tasks: BackgroundTasks):
     now = time.time()
     with get_db() as db:
         if req.sample_type == "static":
@@ -665,7 +711,24 @@ def save_samples(req: SampleSaveRequest):
                 "SELECT COUNT(*) FROM dynamic_samples WHERE gesture=?", (req.gesture,)
             ).fetchone()[0]
         db.execute("UPDATE gesture_registry SET updated_at=? WHERE name=?", (now, req.gesture))
+
+        # Count new samples since last train/save to decide if auto-retrain is due
+        new_since = db.execute(
+            "SELECT COUNT(*) FROM session_history "
+            "WHERE event_type='sample_saved' "
+            "AND created_at > COALESCE("
+            "  (SELECT MAX(created_at) FROM session_history "
+            "   WHERE event_type IN ('model_saved', 'auto_retrain')), 0)"
+        ).fetchone()[0]
+
     log_session("sample_saved", req.gesture, f"{req.sample_type} x{len(req.samples)}")
+
+    # Auto-retrain: trigger every N new samples when a trained model already exists
+    if (unified_nn.trained and _AUTO_RETRAIN_EVERY > 0
+            and not _train_lock.locked()
+            and new_since > 0 and new_since % _AUTO_RETRAIN_EVERY == 0):
+        background_tasks.add_task(_do_auto_retrain)
+
     return {"ok": True, "total": count}
 
 @app.get("/api/samples/load")
@@ -811,7 +874,7 @@ def sample_preview(gesture: str):
                                d_rows[-1]['created_at'] * 1000 if d_rows else None),
     }
 
-# -- Gesture registry --
+# Gesture registry
 
 @app.get("/api/gestures")
 def get_gestures():
@@ -874,7 +937,7 @@ def gesture_readiness(source: str = 'all'):
     return result
 
 
-# -- History --
+# History
 
 @app.get("/api/history")
 def get_history(limit: int = 50):
@@ -911,7 +974,7 @@ def history_stats():
     }
 
 
-# -- Prediction log --
+# Prediction log
 
 @app.post("/api/predictions/log")
 def log_prediction(req: PredLogRequest):
@@ -931,7 +994,7 @@ def recent_predictions(limit: int = 20):
     return [dict(r) for r in rows]
 
 
-# -- Export / Import --
+# Export / Import
 
 @app.get("/api/export/json")
 def export_json():
@@ -1009,7 +1072,7 @@ async def import_json(body: dict, _: None = Depends(require_admin)):
     return {"ok": True, "imported": imported}
 
 
-# -- MediaPipe --
+# MediaPipe endpoints
 
 @app.get("/api/mediapipe/status")
 def mp_status():
@@ -1037,7 +1100,7 @@ async def mp_process(body: dict):
         return {"error": str(e)}
 
 
-# -- MQTT status --
+# MQTT status
 
 @app.get("/api/mqtt/status")
 def mqtt_status():
@@ -1051,7 +1114,7 @@ def mqtt_status():
     }
 
 
-# -- NLP --
+# NLP
 
 @app.post("/api/nlp/suggestions")
 def get_suggestions(body: dict):
@@ -1071,7 +1134,10 @@ def get_context_suggestions(body: dict):
 
 @app.post("/api/nlp/word_suggestions")
 def get_word_suggestions(body: dict):
-    return {"suggestions": word_prefix_suggest(body.get("prefix", ""))}
+    return {"suggestions": word_prefix_suggest(
+        body.get("prefix", ""),
+        user_vocab=body.get("user_vocab"),
+    )}
 
 @app.post("/api/nlp/learn")
 async def nlp_learn(body: dict):
@@ -1125,7 +1191,7 @@ def nlp_grammar(body: dict):
     return {"ok": True, "original": sentence, "corrected": corrected, "changed": corrected is not None}
 
 
-# -- Sentence --
+# Sentence
 
 @app.get("/api/sentence")
 def get_sentence():
@@ -1153,7 +1219,7 @@ async def update_sentence(req: SentenceRequest):
     return s.to_dict()
 
 
-# -- Settings --
+# Settings
 
 @app.get("/api/settings/conf_thresholds")
 def get_all_gesture_thresholds():
@@ -1175,6 +1241,11 @@ def set_gesture_threshold(gesture: str, req: ConfThresholdRequest):
         )
     return {"ok": True, "gesture": gesture, "threshold": val}
 
+@app.get("/api/settings/gemini_key")
+def get_gemini_key():
+    """Expose server-side Gemini API key so the frontend can use it without the user entering it."""
+    return {"available": bool(_GEMINI_API_KEY), "key": _GEMINI_API_KEY if _GEMINI_API_KEY else None}
+
 @app.get("/api/settings/{key}")
 def get_setting(key: str):
     with get_db() as db:
@@ -1194,7 +1265,7 @@ def delete_setting(key: str):
     return {"ok": True}
 
 
-#  Frontend static files (must be last) 
+# Frontend static files (must be last)
 
 @app.get("/service-worker.js")
 async def sw_route():

@@ -67,7 +67,7 @@ GESTURE_TEMPLATES = {
 DEFAULT_GESTURES = ['Hello','Thank You','Yes','No','Help','Please','Sorry','Stop','Go','Water']
 
 
-# Simple helpers 
+# Helpers
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
@@ -76,7 +76,7 @@ def noise(scale=0.1):
     return (random.random() - 0.5) * scale
 
 
-#  Data simulation (for demo mode) 
+# Sample simulation (used in demo/testing)
 
 def _sim_one_hand(name, mirror=False):
     t = GESTURE_TEMPLATES.get(name)
@@ -91,26 +91,22 @@ def _sim_one_hand(name, mirror=False):
 
 
 def _sim_face_features(dominant_hand=None):
-    """10 face features: nose_x, nose_y, eye_scale, dom_wrist_dx, dom_wrist_dy,
-    aux_wrist_dx, aux_wrist_dy, tilt, mouth_open, eye_open"""
     nose_x    = random.uniform(0.4, 0.6)
     nose_y    = random.uniform(0.3, 0.6)
     eye_scale = clamp(random.uniform(0.3, 0.5), 0.0, 1.0)
-    # Simulated wrist-to-nose offsets — hand is typically below-right of nose
     if dominant_hand:
         h1nx = clamp(noise(0.25) + 0.1, -1, 1)
-        h1ny = clamp(noise(0.25) + 0.3, -1, 1)   # wrist usually below nose
+        h1ny = clamp(noise(0.25) + 0.3, -1, 1)
     else:
         h1nx = noise(0.1)
         h1ny = noise(0.1)
     tilt       = noise(0.05)
-    mouth_open = clamp(noise(0.04), 0.0, 1.0)    # mostly closed
-    eye_open   = clamp(0.5 + noise(0.08), 0.0, 1.0)  # mostly open
+    mouth_open = clamp(noise(0.04), 0.0, 1.0)
+    eye_open   = clamp(0.5 + noise(0.08), 0.0, 1.0)
     return [nose_x, nose_y, eye_scale, h1nx, h1ny, 0.0, 0.0, tilt, mouth_open, eye_open]
 
 
 def _sim_pose_features():
-    """6 pose features: sh_mid_x, sh_mid_y, h1_sh_dy, h2_sh_dy, elbow_angle, body_visible"""
     return [
         random.uniform(0.45, 0.55),
         random.uniform(0.4, 0.6),
@@ -122,7 +118,6 @@ def _sim_pose_features():
 
 
 def simulate_static(name, mirror_aug=False):
-    """41-feature Holistic vector: [dom×11] + [aux×11] + [face×10] + [pose×6] + [flags×3]"""
     dom   = _sim_one_hand(name)
     aux   = [0] * 11
     face  = _sim_face_features(dom)
@@ -145,7 +140,6 @@ def simulate_static(name, mirror_aug=False):
 
 
 def simulate_dynamic(name, frames=DYNAMIC_FRAMES):
-    """Flat sequence: frames × 41 features = 1845 floats"""
     t = GESTURE_TEMPLATES.get(name)
     if not t:
         return None
@@ -156,11 +150,11 @@ def simulate_dynamic(name, frames=DYNAMIC_FRAMES):
         mn = math.sin(p * math.pi * 2) * 0.1
         curls = [clamp(c * p + noise(0.08), 0, 1) for c in t['curls']]
         ori   = [o * p + (mn if i < 3 else noise(0.02)) * 0.3 for i, o in enumerate(t['ori'])]
-        dom   = curls + ori        # 11 features
-        aux   = [0.0] * 11         # 11 features — no auxiliary hand
-        face  = _sim_face_features()   # 10 features
-        pose  = _sim_pose_features()   # 6 features
-        flags = [1.0, 0.0, 1.0]    # dom_present, aux_absent, face_present — 3 features
+        dom   = curls + ori
+        aux   = [0.0] * 11
+        face  = _sim_face_features()
+        pose  = _sim_pose_features()
+        flags = [1.0, 0.0, 1.0]
         frame_vec = (dom + aux + face + pose + flags)[:DYNAMIC_FEATURES]
         while len(frame_vec) < DYNAMIC_FEATURES:
             frame_vec.append(0.0)
@@ -170,19 +164,20 @@ def simulate_dynamic(name, frames=DYNAMIC_FRAMES):
 
 
 def score_sample_quality(vec):
-    """Score a feature vector on how varied and non-clipped it is."""
     import numpy as np
+
     arr      = np.array(vec[:5])
     variance = float(np.var(arr))
     clipping = float(np.mean((arr < 0.02) | (arr > 0.98)))
     return round(min(1.0, max(0.1, 0.5 + variance * 4 - clipping * 0.3)), 3)
 
 
-# ── DB connection ─────────────────────────────────────────────────────────────
+# Database
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
@@ -194,7 +189,7 @@ def log_session(event_type, gesture=None, detail=None):
         )
 
 
-# ── Schema & migration ────────────────────────────────────────────────────────
+# Schema & migrations
 
 def _get_cols(db, table):
     try:
@@ -204,7 +199,6 @@ def _get_cols(db, table):
 
 
 def _migrate_old_samples(db, now):
-    """Migrate blob-style schema (gesture PK, samples JSON-array) to row-per-sample schema."""
     sc = _get_cols(db, 'static_samples')
     dc = _get_cols(db, 'dynamic_samples')
     old_static, old_dynamic = {}, {}
@@ -342,7 +336,6 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_dynamic_g ON dynamic_samples(gesture);
         """)
 
-        # Column-level migrations for partially-updated databases
         sc = _get_cols(db, 'static_samples')
         dc = _get_cols(db, 'dynamic_samples')
         gc = _get_cols(db, 'gesture_registry')

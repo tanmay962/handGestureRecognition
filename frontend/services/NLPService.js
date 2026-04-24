@@ -5,9 +5,24 @@ var API = '/api';
 
 export class NLPService {
   constructor(geminiService) {
-    this.gemini            = geminiService;
-    this._personalCorpusCount = 0;   // sentences learned so far
-    this._sentencesSinceRetrain = 0; // trigger retrain every N sentences
+    this.gemini               = geminiService;
+    this._personalCorpusCount    = 0;
+    this._sentencesSinceRetrain  = 0;
+    this._userVocab              = this._loadUserVocab(); // word → use-count
+  }
+
+  // ── User vocabulary (localStorage) ───────────────────────
+  _loadUserVocab() {
+    try { return JSON.parse(localStorage.getItem('nlp_user_vocab') || '{}'); } catch(e) { return {}; }
+  }
+  _saveUserVocab() {
+    try { localStorage.setItem('nlp_user_vocab', JSON.stringify(this._userVocab)); } catch(e) {}
+  }
+  learnWord(word) {
+    if (!word || word.length < 2) return;
+    var w = word.toLowerCase();
+    this._userVocab[w] = (this._userVocab[w] || 0) + 1;
+    this._saveUserVocab();
   }
 
   // ── Next-word suggestions ─────────────────────────────────────
@@ -119,20 +134,26 @@ export class NLPService {
     try {
       var res = await fetch(API + '/nlp/word_suggestions', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ prefix: prefix })
+        body: JSON.stringify({ prefix: prefix, user_vocab: this._userVocab })
       });
       var data = await res.json();
       return data.suggestions || [];
     } catch(e) {
-      return [];
+      return this.getWordSuggestionsSync(prefix);
     }
   }
 
-  // Sync shim for inline use
+  // Sync shim — fallback and fast-path for inline use
   getWordSuggestionsSync(prefix) {
     if (!prefix) return [];
-    var COMMON = 'the,be,to,of,and,a,in,that,have,I,it,for,not,on,with,you,do,at,this,help,please,thank,yes,no,stop,go,sorry,hello,water,food,good,need,home,here,come,open,close'.split(',');
-    return COMMON.filter(function(w){ return w.startsWith(prefix.toLowerCase()) && w !== prefix.toLowerCase(); }).slice(0, 5);
+    var p    = prefix.toLowerCase();
+    var self = this;
+    var userMatches = Object.keys(this._userVocab)
+      .filter(function(w){ return w.startsWith(p) && w !== p; })
+      .sort(function(a, b){ return (self._userVocab[b] || 0) - (self._userVocab[a] || 0); });
+    var COMMON = 'the,be,to,of,and,a,in,that,have,I,it,for,not,on,with,you,do,at,this,help,please,thank,yes,no,stop,go,sorry,hello,water,food,good,need,home,here,come,open,close,am,are,is,hungry,tired,sick,happy,sad,pain,doctor,family,sleep,want,more,call'.split(',');
+    var base = COMMON.filter(function(w){ return w.toLowerCase().startsWith(p) && w.toLowerCase() !== p && userMatches.indexOf(w.toLowerCase()) === -1; });
+    return userMatches.concat(base).slice(0, 5);
   }
 
   getPersonalCorpusCount() { return this._personalCorpusCount; }

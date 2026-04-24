@@ -402,7 +402,7 @@ var RecognitionController = (function() {
       this.contextState = 'SPELLING';
       this.sentence.addLetter(name);
       this._lastLetterTime = Date.now();
-      var wordSuggs = this.nlp.getWordSuggestions(this.sentence.getSpelling());
+      var wordSuggs = this.nlp.getWordSuggestionsSync(this.sentence.getSpelling());
       this.sentence.setWordSuggestions(wordSuggs);
       eventBus.emit(Events.SPELLING_UPDATED, {
         spelling: this.sentence.getSpelling(),
@@ -528,12 +528,14 @@ var RecognitionController = (function() {
     if (this.sentence.wordSuggestions.length > 0 && index < this.sentence.wordSuggestions.length) {
       var word = this.sentence.wordSuggestions[index];
       this.sentence.acceptWordSuggestion(word);
+      this.nlp.learnWord(word);
       this.tts.speakIfAuto(word);
       eventBus.emit(Events.SUGGESTION_SELECTED, { word: word, index: index });
       eventBus.emit(Events.SENTENCE_UPDATED);
     } else if (this.sentence.suggestions.length > 0 && index < this.sentence.suggestions.length) {
       var w = this.sentence.suggestions[index];
       this.sentence.addWord(w);
+      this.nlp.learnWord(w);
       this.tts.speakIfAuto(w);
       eventBus.emit(Events.SUGGESTION_SELECTED, { word: w, index: index });
       eventBus.emit(Events.SENTENCE_UPDATED);
@@ -548,9 +550,12 @@ var RecognitionController = (function() {
       if (self.sentence.getSpelling() && self.sentence.wordSuggestions.length > 0) {
         var top = self.sentence.wordSuggestions[0];
         self.sentence.acceptWordSuggestion(top);
+        self.nlp.learnWord(top);
         self.tts.speakIfAuto(top);
       } else if (self.sentence.getSpelling()) {
-        self.sentence.addWord(self.sentence.getSpelling());
+        var spelled = self.sentence.getSpelling();
+        self.sentence.addWord(spelled);
+        self.nlp.learnWord(spelled);
         self.sentence.clearSpelling();
       }
       eventBus.emit(Events.SENTENCE_UPDATED);

@@ -3,8 +3,20 @@ import {APP_CONFIG} from '../config/app.config.js';
 import {eventBus,Events} from '../utils/EventBus.js';
 
 export class GeminiService{
-  constructor(){this.apiKey='';this.enabled=false}
+  constructor(){this.apiKey='';this.enabled=false;this._serverKeyLoaded=false}
   setApiKey(k){this.apiKey=k.trim();this.enabled=this.apiKey.length>10}
+
+  // Fetch server-side key (set via GEMINI_API_KEY env var). Called once on init.
+  async loadServerKey(){
+    if(this.enabled||this._serverKeyLoaded)return;
+    this._serverKeyLoaded=true;
+    try{
+      var r=await fetch('/api/settings/gemini_key');
+      var d=await r.json();
+      if(d.available&&d.key){this.setApiKey(d.key);console.log('[Gemini] Using server-side API key');}
+    }catch(e){}
+  }
+
   async testConnection(k){
     this.setApiKey(k);
     try{const r=await this._call('Say OK',{maxOutputTokens:5});if(r!==null){eventBus.emit(Events.GEMINI_CONNECTED);return true}}catch{}

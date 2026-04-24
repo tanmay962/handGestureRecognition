@@ -104,6 +104,16 @@ export class TrainingController {
 
   async collectStaticSamples(name, count) { return this.collectLiveBurst(name, count || 5); }
 
+  // ── Bulk capture (one countdown, N samples spaced 350ms apart) ───────
+  async collectBulkStatic(name, count) {
+    count = count || 5;
+    await this.runCountdown(3);
+    for (var i = 0; i < count; i++) {
+      await this.collectStaticSample(name, true);
+      if (i < count - 1) await new Promise(function(r){ setTimeout(r, 350); });
+    }
+  }
+
   // ── Dynamic recording — with abort on hand loss ───────────────
   startDynamicRecording(name) {
     this._dynLostFrames = 0;
@@ -214,41 +224,33 @@ export class TrainingController {
       })
     });
 
-    // ── Train unified BiLSTM ──────────────────────────────────────────────
-    // Use dynamic-style hyper-params when motion data exists; fall back to
-    // static-style (more epochs, higher lr) when only static samples present.
-    var EPOCHS = (dd.inputs.length > 0) ? 400 : APP_CONFIG.NN.TRAINING_EPOCHS;
-    var BATCH  = (dd.inputs.length > 0) ? 15  : APP_CONFIG.NN.EPOCH_BATCH;
+    // ── Train unified BiLSTM — single call, backend handles SWA + warmup ────
+    var EPOCHS = APP_CONFIG.NN.TRAINING_EPOCHS;
     var lr     = (dd.inputs.length > 0) ? 0.001 : 0.008;
 
-    for (var ep = 0; ep < EPOCHS; ep += BATCH) {
-      await new Promise(function(r){ setTimeout(r, 4); });
-      var ep2  = Math.min(BATCH, EPOCHS - ep);
-      var res  = await fetch(API + '/nn/train', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:ep2, lr:lr })
-      });
-      var data = await res.json();
+    // Progress updates come via WebSocket train_progress events (handled in AppController).
+    // A single fetch lets the backend run the full training pipeline uninterrupted.
+    var res  = await fetch(API + '/nn/train', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:EPOCHS, lr:lr })
+    });
+    var data = await res.json();
 
-      // Mirror stats to both frontend NN objects so views remain consistent
-      this.staticNN.accuracy      = data.accuracy;
-      this.staticNN.val_accuracy  = data.val_accuracy || 0;
-      this.staticNN.loss          = data.loss;
-      this.staticNN.epochs        = data.epochs;
-      this.staticNN.trained       = true;
-      this.dynamicNN.accuracy     = data.accuracy;
-      this.dynamicNN.val_accuracy = data.val_accuracy || 0;
-      this.dynamicNN.loss         = data.loss;
-      this.dynamicNN.epochs       = data.epochs;
-      this.dynamicNN.trained      = true;
+    // Mirror final stats to both frontend NN objects
+    this.staticNN.accuracy      = data.accuracy;
+    this.staticNN.val_accuracy  = data.val_accuracy || 0;
+    this.staticNN.loss          = data.loss;
+    this.staticNN.epochs        = data.epochs;
+    this.staticNN.trained       = true;
+    this.dynamicNN.accuracy     = data.accuracy;
+    this.dynamicNN.val_accuracy = data.val_accuracy || 0;
+    this.dynamicNN.loss         = data.loss;
+    this.dynamicNN.epochs       = data.epochs;
+    this.dynamicNN.trained      = true;
 
-      if (!window._perGestAcc) window._perGestAcc = {};
-      window._perGestAcc.static  = data.per_gesture_acc || {};
-      window._perGestAcc.dynamic = data.per_gesture_acc || {};
-
-      this.progress = ((ep + ep2) / EPOCHS) * 100;
-      eventBus.emit(Events.TRAIN_PROGRESS, { progress:this.progress, model:'unified', accuracy:data.accuracy });
-    }
+    if (!window._perGestAcc) window._perGestAcc = {};
+    window._perGestAcc.static  = data.per_gesture_acc || {};
+    window._perGestAcc.dynamic = data.per_gesture_acc || {};
 
     await fetch(API + '/nn/save/unified?source=' + (window._trainSource||'camera'), { method:'POST' });
 

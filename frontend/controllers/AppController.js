@@ -171,11 +171,13 @@ export class AppController {
       }
     } catch(e) {}
 
-    // Load API key
+    // Load API key (user-stored key takes priority; server key is fallback)
     try {
       var kd = await (await fetch(API + '/settings/apiKey')).json();
       if (kd.value) { var k = JSON.parse(kd.value); this.gemini.setApiKey(k); }
     } catch(e) {}
+    // Try server-side Gemini key if user hasn't provided their own
+    await this.gemini.loadServerKey();
 
     // Load conf threshold
     try {
@@ -199,15 +201,22 @@ export class AppController {
     // WebSocket handlers
     var self = this;
     wsClient.on('train_progress', function(d) {
-      if (d.model === 'static' || d.model === 'unified') {
-        self.staticNN.accuracy = d.accuracy; self.staticNN.loss = d.loss;
-        self.staticNN.epochs = d.epochs; self.staticNN.trained = true;
-        if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.static = d.per_gesture_acc; }
+      // Update live progress bar via trainCtrl so TrainView reflects it
+      if (d.progress_pct !== undefined && self.trainCtrl.isTraining) {
+        self.trainCtrl.progress = d.progress_pct;
       }
-      if (d.model === 'dynamic' || d.model === 'unified') {
-        self.dynamicNN.accuracy = d.accuracy; self.dynamicNN.loss = d.loss;
-        self.dynamicNN.epochs = d.epochs; self.dynamicNN.trained = true;
-        if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.dynamic = d.per_gesture_acc; }
+      // Final completion event carries accuracy/loss/epochs
+      if (d.complete) {
+        if (d.model === 'static' || d.model === 'unified') {
+          self.staticNN.accuracy = d.accuracy; self.staticNN.loss = d.loss;
+          self.staticNN.epochs = d.epochs; self.staticNN.trained = true;
+          if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.static = d.per_gesture_acc; }
+        }
+        if (d.model === 'dynamic' || d.model === 'unified') {
+          self.dynamicNN.accuracy = d.accuracy; self.dynamicNN.loss = d.loss;
+          self.dynamicNN.epochs = d.epochs; self.dynamicNN.trained = true;
+          if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.dynamic = d.per_gesture_acc; }
+        }
       }
       eventBus.emit(Events.TRAIN_PROGRESS, d);
     });
@@ -468,6 +477,25 @@ export class AppController {
     }
   }
 
+  async addBulkSamples(name, count) {
+    var self = this;
+    var statusEl = document.getElementById('trainStatus');
+    function showStatus(msg, color) {
+      if (!statusEl) return;
+      statusEl.style.display = 'block';
+      statusEl.textContent   = msg;
+      statusEl.style.background = color;
+      statusEl.style.color   = 'var(--bg)';
+      clearTimeout(statusEl._t);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 3000);
+    }
+    showStatus('⏳ Get ready — capturing ' + count + '× "' + name + '" in 3s…', 'var(--a)');
+    await this.trainCtrl.collectBulkStatic(name, count);
+    showStatus('✓ ' + count + ' samples captured for "' + name + '"', 'var(--g)');
+    await this._refreshTrainMeta();
+    this.view.render();
+  }
+
   // ── Gesture management ────────────────────────────────────────────────────
   addGesture(name)    { this.trainCtrl.addGesture(name);    this.view.render(); }
   removeGesture(name) { this.trainCtrl.removeGesture(name); this.view.render(); }
@@ -544,7 +572,7 @@ export class AppController {
       self.view.render();
       await new Promise(function(r){ setTimeout(r, 400); });
       if (!DYN[name]) {
-        await self.addSample(name, 'static');
+        await self.addBulkSamples(name, 5);
       }
       await new Promise(function(r){ setTimeout(r, 200); });
     }

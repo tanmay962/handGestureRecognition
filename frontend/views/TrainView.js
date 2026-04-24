@@ -510,7 +510,8 @@ function _card(name, meta, readiness, defaultType, isGuided) {
     '<div style="display:flex;gap:3px;justify-content:center">' +
     (isDyn
       ? '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Record</button>'
-      : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Capture</button>') +
+      : '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">+1</button>' +
+        '<button style="padding:4px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid rgba(255,255,255,0.25);border-radius:6px;cursor:pointer" onclick="window._app.addBulkSamples(\'' + esc(name) + '\',5)">×5</button>') +
     (count > 0
       ? '<button style="padding:4px 6px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'' + t + '\')">Del</button>'
       : '') +
@@ -543,7 +544,8 @@ function _wideCard(name, meta, readiness, isCustom) {
     '<span style="font-size:8px;color:var(--mx);white-space:nowrap">' + (ready ? 'Ready' : 'Need ' + needed) + '</span>' +
     '</div>' +
     '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
-    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">Capture</button>' +
+    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'static\')">+1</button>' +
+    '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid rgba(255,255,255,0.25);border-radius:6px;cursor:pointer" onclick="window._app.addBulkSamples(\'' + esc(name) + '\',5)">×5</button>' +
     '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.addSample(\'' + esc(name) + '\',\'dynamic\')">Record</button>' +
     (sc + dc > 0
       ? '<button style="padding:5px 8px;font-size:9px;font-weight:700;font-family:inherit;background:var(--s2);color:#ffffff;border:1px solid var(--brd);border-radius:6px;cursor:pointer" onclick="window._app.deleteGestureSamples(\'' + esc(name) + '\',\'all\')">Delete</button>'
