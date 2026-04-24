@@ -86,10 +86,11 @@ export class GestureModel {
     if (source === 'camera') this.sampleCounts[name].static_camera++;
     else if (source === 'glove') this.sampleCounts[name].static_glove++;
 
-    await fetch(API + '/samples/save', {
+    var saveRes = await fetch(API + '/samples/save', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({gesture: name, samples: vectors, sample_type: 'static', source: source})
     });
+    if (!saveRes.ok) throw new Error('Server returned ' + saveRes.status);
   }
 
   async addDynamicSamples(name, trajectories, source) {

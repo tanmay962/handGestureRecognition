@@ -25,3 +25,5 @@ Thumbs.db
 
 # Node
 node_modules/
+key.pem
+cert.pem

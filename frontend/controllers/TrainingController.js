@@ -47,39 +47,52 @@ export class TrainingController {
 
     var sample, mirroredSample;
 
-    if (useLive) {
-      sample = this.sensor.getFeatureVector().slice();
+    try {
+      if (useLive) {
+        sample = this.sensor.getFeatureVector().slice();
 
-      // Mirror augmentation — only possible with camera (landmarks available)
-      if (this._camera && this._camera._lastHandsData && this._camera._lastHandsData.length > 0) {
-        mirroredSample = this._camera.getMirroredFeatures(this._camera._lastHandsData);
+        // Mirror augmentation — only possible with camera (landmarks available)
+        if (this._camera && this._camera._lastHandsData && this._camera._lastHandsData.length > 0) {
+          mirroredSample = this._camera.getMirroredFeatures(this._camera._lastHandsData);
+        }
+      } else {
+        // Simulate — backend generates the feature vector
+        var res  = await fetch(API + '/samples/simulate', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ gesture:name, count:1, sample_type:'static', source:'camera' })
+        });
+        if (!res.ok) throw new Error('simulate failed: ' + res.status);
+        var data = await res.json();
+        sample   = data.samples && data.samples[0];
+        // For simulated data, generate a mirrored version too
+        if (data.mirrored && data.mirrored.length > 0) {
+          mirroredSample = data.mirrored[0];
+        }
       }
-    } else {
-      // Simulate — backend generates the 24-feature vector
-      var res  = await fetch(API + '/samples/simulate', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ gesture:name, count:1, sample_type:'static', source:'camera' })
-      });
-      var data = await res.json();
-      sample   = data.samples && data.samples[0];
-      // For simulated data, generate a mirrored version too
-      if (data.mirrored && data.mirrored.length > 0) {
-        mirroredSample = data.mirrored[0];
-      }
+    } catch(e) {
+      console.error('[TrainCtrl] capture error:', e);
+      eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0, error: String(e) });
+      return { live:false, sample:null, mirrored:false, error: String(e) };
     }
 
-    // Guard: if no sample was produced (hand absent + simulation returned empty), bail out
+    // Guard: if no sample was produced, bail out
     if (!sample || !sample.length) {
       eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0 });
       return { live:false, sample:null, mirrored:false };
     }
 
-    // Save original sample
-    await this.gm.addStaticSamples(name, [sample], false, window._trainSource||'camera');
+    try {
+      // Save original sample
+      await this.gm.addStaticSamples(name, [sample], false, window._trainSource||'camera');
 
-    // Save mirrored sample if available (doubles training data for free)
-    if (mirroredSample) {
-      await this.gm.addStaticSamples(name, [mirroredSample], true, window._trainSource||'camera');
+      // Save mirrored sample if available (doubles training data for free)
+      if (mirroredSample) {
+        await this.gm.addStaticSamples(name, [mirroredSample], true, window._trainSource||'camera');
+      }
+    } catch(e) {
+      console.error('[TrainCtrl] save error:', e);
+      eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0, error: 'Save failed — is the server running?' });
+      return { live:false, sample:null, mirrored:false, error: 'Save failed — is the server running?' };
     }
 
     eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:useLive, count: mirroredSample ? 2 : 1 });
@@ -241,6 +254,13 @@ export class TrainingController {
       body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:EPOCHS, lr:lr })
     });
     var data = await res.json();
+
+    // Guard: backend returned an error (e.g. 401 admin PIN, 500 internal error)
+    if (!res.ok || data.error || !data.accuracy) {
+      this.isTraining = false;
+      eventBus.emit(Events.TRAIN_COMPLETE, { error: data.error || data.detail || 'Training failed (server error)' });
+      return;
+    }
 
     // Mirror final stats to both frontend NN objects
     this.staticNN.accuracy      = data.accuracy;

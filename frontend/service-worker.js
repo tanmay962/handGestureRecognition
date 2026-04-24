@@ -1,9 +1,9 @@
 // service-worker.js — Gesture Detection v1.0 PWA
-const CACHE = 'gd-v1.6';
+const CACHE = 'gd-v3.1';
 const STATIC = [
   '/',
   '/index.html',
-  '/bundle.js?v=1.6',
+  '/bundle.js?v=3.1',
   '/assets/css/styles.css',
   '/manifest.json',
   '/assets/icons/icon-192.png',

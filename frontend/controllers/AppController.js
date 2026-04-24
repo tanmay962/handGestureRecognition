@@ -260,17 +260,15 @@ export class AppController {
 
   async _refreshTrainMeta() {
     var self = this;
-    try {
-      var results = await Promise.all([
-        fetch(API + '/samples/meta').then(function(r){ return r.json(); }),
-        fetch(API + '/gestures/readiness?source=' + (window._trainSource||'camera')).then(function(r){ return r.json(); }),
-        fetch(API + '/history/stats').then(function(r){ return r.json(); }),
-      ]);
-      window._trainMeta  = results[0];
-      window._readiness  = results[1];
-      window._histStats  = results[2];
-      self._refreshNlpStats();
-    } catch(e) {}
+    // Each request is independent — one failure never blocks the others
+    var metaP = fetch(API + '/samples/meta').then(function(r){ return r.json(); }).catch(function(){ return null; });
+    var readP = fetch(API + '/gestures/readiness?source=' + (window._trainSource||'camera')).then(function(r){ return r.json(); }).catch(function(){ return null; });
+    var histP = fetch(API + '/history/stats').then(function(r){ return r.json(); }).catch(function(){ return null; });
+    var results = await Promise.all([metaP, readP, histP]);
+    if (results[0]) window._trainMeta = results[0];
+    if (results[1]) window._readiness = results[1];
+    if (results[2]) window._histStats = results[2];
+    self._refreshNlpStats();
   }
 
   async _refreshNlpStats() {
@@ -431,12 +429,16 @@ export class AppController {
     if (type === 'static') {
       showStatus('⏳ Get ready — capturing "' + gestureName + '" in 3s…', 'var(--a)');
       var result = await this.trainCtrl.collectStaticSample(gestureName, false);
-      showStatus(
-        result.live
-          ? '✓ Live sample captured for "' + gestureName + '"'
-          : '📦 Simulated sample for "' + gestureName + '" (no hand detected)',
-        result.live ? 'var(--g)' : 'var(--a)'
-      );
+      if (result.error) {
+        showStatus('❌ ' + result.error, 'var(--r)');
+      } else {
+        showStatus(
+          result.live
+            ? '✓ Live sample captured for "' + gestureName + '"'
+            : '📦 Simulated sample for "' + gestureName + '" (no hand detected)',
+          result.live ? 'var(--g)' : 'var(--a)'
+        );
+      }
       window._lastSampledGesture = gestureName;
       await this._refreshTrainMeta();
       this.view.render();

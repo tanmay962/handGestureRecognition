@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-24T16:29:50.677Z
+// Built: 2026-04-24T17:47:32.795Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -560,10 +560,11 @@ class GestureModel {
     if (source === 'camera') this.sampleCounts[name].static_camera++;
     else if (source === 'glove') this.sampleCounts[name].static_glove++;
 
-    await fetch(API + '/samples/save', {
+    var saveRes = await fetch(API + '/samples/save', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({gesture: name, samples: vectors, sample_type: 'static', source: source})
     });
+    if (!saveRes.ok) throw new Error('Server returned ' + saveRes.status);
   }
 
   async addDynamicSamples(name, trajectories, source) {
@@ -1528,7 +1529,7 @@ var MQTTService = (function() {
 // ═══ services/GeminiService.js ═══
 // services/GeminiService.js
 // All Gemini calls are proxied through the backend — API key never touches the browser.
-var API = '/api/gemini';
+var GEMINI_API = '/api/gemini';
 
 class GeminiService {
   constructor() {
@@ -1555,7 +1556,7 @@ class GeminiService {
   async getSuggestions(sentence, lastWord, context) {
     if (!this.enabled) return null;
     try {
-      var r = await fetch(API + '/suggestions', {
+      var r = await fetch(GEMINI_API + '/suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sentence: sentence || '', last_word: lastWord || '', context: context || '' }),
@@ -1568,7 +1569,7 @@ class GeminiService {
   async completeSentence(s) {
     if (!this.enabled || !s) return null;
     try {
-      var r = await fetch(API + '/complete', {
+      var r = await fetch(GEMINI_API + '/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sentence: s }),
@@ -1581,7 +1582,7 @@ class GeminiService {
   async correctGrammar(s) {
     if (!this.enabled || !s) return null;
     try {
-      var r = await fetch(API + '/grammar', {
+      var r = await fetch(GEMINI_API + '/grammar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sentence: s }),
@@ -3839,39 +3840,52 @@ class TrainingController {
 
     var sample, mirroredSample;
 
-    if (useLive) {
-      sample = this.sensor.getFeatureVector().slice();
+    try {
+      if (useLive) {
+        sample = this.sensor.getFeatureVector().slice();
 
-      // Mirror augmentation — only possible with camera (landmarks available)
-      if (this._camera && this._camera._lastHandsData && this._camera._lastHandsData.length > 0) {
-        mirroredSample = this._camera.getMirroredFeatures(this._camera._lastHandsData);
+        // Mirror augmentation — only possible with camera (landmarks available)
+        if (this._camera && this._camera._lastHandsData && this._camera._lastHandsData.length > 0) {
+          mirroredSample = this._camera.getMirroredFeatures(this._camera._lastHandsData);
+        }
+      } else {
+        // Simulate — backend generates the feature vector
+        var res  = await fetch(API + '/samples/simulate', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ gesture:name, count:1, sample_type:'static', source:'camera' })
+        });
+        if (!res.ok) throw new Error('simulate failed: ' + res.status);
+        var data = await res.json();
+        sample   = data.samples && data.samples[0];
+        // For simulated data, generate a mirrored version too
+        if (data.mirrored && data.mirrored.length > 0) {
+          mirroredSample = data.mirrored[0];
+        }
       }
-    } else {
-      // Simulate — backend generates the 24-feature vector
-      var res  = await fetch(API + '/samples/simulate', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ gesture:name, count:1, sample_type:'static', source:'camera' })
-      });
-      var data = await res.json();
-      sample   = data.samples && data.samples[0];
-      // For simulated data, generate a mirrored version too
-      if (data.mirrored && data.mirrored.length > 0) {
-        mirroredSample = data.mirrored[0];
-      }
+    } catch(e) {
+      console.error('[TrainCtrl] capture error:', e);
+      eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0, error: String(e) });
+      return { live:false, sample:null, mirrored:false, error: String(e) };
     }
 
-    // Guard: if no sample was produced (hand absent + simulation returned empty), bail out
+    // Guard: if no sample was produced, bail out
     if (!sample || !sample.length) {
       eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0 });
       return { live:false, sample:null, mirrored:false };
     }
 
-    // Save original sample
-    await this.gm.addStaticSamples(name, [sample], false, window._trainSource||'camera');
+    try {
+      // Save original sample
+      await this.gm.addStaticSamples(name, [sample], false, window._trainSource||'camera');
 
-    // Save mirrored sample if available (doubles training data for free)
-    if (mirroredSample) {
-      await this.gm.addStaticSamples(name, [mirroredSample], true, window._trainSource||'camera');
+      // Save mirrored sample if available (doubles training data for free)
+      if (mirroredSample) {
+        await this.gm.addStaticSamples(name, [mirroredSample], true, window._trainSource||'camera');
+      }
+    } catch(e) {
+      console.error('[TrainCtrl] save error:', e);
+      eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:false, count:0, error: 'Save failed — is the server running?' });
+      return { live:false, sample:null, mirrored:false, error: 'Save failed — is the server running?' };
     }
 
     eventBus.emit(Events.SAMPLES_COLLECTED, { gesture:name, live:useLive, count: mirroredSample ? 2 : 1 });
@@ -4033,6 +4047,13 @@ class TrainingController {
       body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:EPOCHS, lr:lr })
     });
     var data = await res.json();
+
+    // Guard: backend returned an error (e.g. 401 admin PIN, 500 internal error)
+    if (!res.ok || data.error || !data.accuracy) {
+      this.isTraining = false;
+      eventBus.emit(Events.TRAIN_COMPLETE, { error: data.error || data.detail || 'Training failed (server error)' });
+      return;
+    }
 
     // Mirror final stats to both frontend NN objects
     this.staticNN.accuracy      = data.accuracy;
@@ -4348,17 +4369,15 @@ class AppController {
 
   async _refreshTrainMeta() {
     var self = this;
-    try {
-      var results = await Promise.all([
-        fetch(API + '/samples/meta').then(function(r){ return r.json(); }),
-        fetch(API + '/gestures/readiness?source=' + (window._trainSource||'camera')).then(function(r){ return r.json(); }),
-        fetch(API + '/history/stats').then(function(r){ return r.json(); }),
-      ]);
-      window._trainMeta  = results[0];
-      window._readiness  = results[1];
-      window._histStats  = results[2];
-      self._refreshNlpStats();
-    } catch(e) {}
+    // Each request is independent — one failure never blocks the others
+    var metaP = fetch(API + '/samples/meta').then(function(r){ return r.json(); }).catch(function(){ return null; });
+    var readP = fetch(API + '/gestures/readiness?source=' + (window._trainSource||'camera')).then(function(r){ return r.json(); }).catch(function(){ return null; });
+    var histP = fetch(API + '/history/stats').then(function(r){ return r.json(); }).catch(function(){ return null; });
+    var results = await Promise.all([metaP, readP, histP]);
+    if (results[0]) window._trainMeta = results[0];
+    if (results[1]) window._readiness = results[1];
+    if (results[2]) window._histStats = results[2];
+    self._refreshNlpStats();
   }
 
   async _refreshNlpStats() {
@@ -4519,12 +4538,16 @@ class AppController {
     if (type === 'static') {
       showStatus('⏳ Get ready — capturing "' + gestureName + '" in 3s…', 'var(--a)');
       var result = await this.trainCtrl.collectStaticSample(gestureName, false);
-      showStatus(
-        result.live
-          ? '✓ Live sample captured for "' + gestureName + '"'
-          : '📦 Simulated sample for "' + gestureName + '" (no hand detected)',
-        result.live ? 'var(--g)' : 'var(--a)'
-      );
+      if (result.error) {
+        showStatus('❌ ' + result.error, 'var(--r)');
+      } else {
+        showStatus(
+          result.live
+            ? '✓ Live sample captured for "' + gestureName + '"'
+            : '📦 Simulated sample for "' + gestureName + '" (no hand detected)',
+          result.live ? 'var(--g)' : 'var(--a)'
+        );
+      }
       window._lastSampledGesture = gestureName;
       await this._refreshTrainMeta();
       this.view.render();

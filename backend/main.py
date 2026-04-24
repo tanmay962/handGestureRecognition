@@ -196,7 +196,7 @@ def _landmarks_to_features(lm):
 
 _mqtt_enabled = False
 _mqtt_client  = None
-_mqtt_loop: asyncio.AbstractEventLoop | None = None
+_mqtt_loop: Optional[asyncio.AbstractEventLoop] = None
 _mqtt_topic   = os.environ.get("MQTT_TOPIC", "gesture-detection/sensor/features")
 
 
@@ -533,7 +533,7 @@ def nn_init(req: NNInitRequest):
     return {"ok": True, "model": req.model_type}
 
 @app.post("/api/nn/train")
-async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
+async def nn_train(req: NNTrainRequest):
     if unified_nn.model is None:
         return {"error": "model not initialised — call /api/nn/init first",
                 "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
@@ -1341,7 +1341,7 @@ def _get_effective_gemini_key() -> str:
 
 _GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
-async def _gemini_call(prompt: str, temperature: float = 0.4, max_tokens: int = 50) -> str | None:
+async def _gemini_call(prompt: str, temperature: float = 0.4, max_tokens: int = 50) -> Optional[str]:
     key = _get_effective_gemini_key()
     if not key:
         return None

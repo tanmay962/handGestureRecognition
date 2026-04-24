@@ -2,7 +2,7 @@
 // All Gemini calls are proxied through the backend — API key never touches the browser.
 import {eventBus,Events} from '../utils/EventBus.js';
 
-var API = '/api/gemini';
+var GEMINI_API = '/api/gemini';
 
 export class GeminiService {
   constructor() {
@@ -29,7 +29,7 @@ export class GeminiService {
   async getSuggestions(sentence, lastWord, context) {
     if (!this.enabled) return null;
     try {
-      var r = await fetch(API + '/suggestions', {
+      var r = await fetch(GEMINI_API + '/suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sentence: sentence || '', last_word: lastWord || '', context: context || '' }),
@@ -42,7 +42,7 @@ export class GeminiService {
   async completeSentence(s) {
     if (!this.enabled || !s) return null;
     try {
-      var r = await fetch(API + '/complete', {
+      var r = await fetch(GEMINI_API + '/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sentence: s }),
@@ -55,7 +55,7 @@ export class GeminiService {
   async correctGrammar(s) {
     if (!this.enabled || !s) return null;
     try {
-      var r = await fetch(API + '/grammar', {
+      var r = await fetch(GEMINI_API + '/grammar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sentence: s }),
