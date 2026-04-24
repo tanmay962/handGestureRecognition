@@ -156,10 +156,15 @@ def simulate_dynamic(name, frames=DYNAMIC_FRAMES):
         mn = math.sin(p * math.pi * 2) * 0.1
         curls = [clamp(c * p + noise(0.08), 0, 1) for c in t['curls']]
         ori   = [o * p + (mn if i < 3 else noise(0.02)) * 0.3 for i, o in enumerate(t['ori'])]
-        dom   = curls + ori   # 11 features
-        aux   = [0] * 11
-        flags = [1, 0]        # dom_present, aux_absent
-        out.extend(dom + aux + flags)
+        dom   = curls + ori        # 11 features
+        aux   = [0.0] * 11         # 11 features — no auxiliary hand
+        face  = _sim_face_features()   # 10 features
+        pose  = _sim_pose_features()   # 6 features
+        flags = [1.0, 0.0, 1.0]    # dom_present, aux_absent, face_present — 3 features
+        frame_vec = (dom + aux + face + pose + flags)[:DYNAMIC_FEATURES]
+        while len(frame_vec) < DYNAMIC_FEATURES:
+            frame_vec.append(0.0)
+        out.extend(frame_vec)
 
     return out
 

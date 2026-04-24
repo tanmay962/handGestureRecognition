@@ -1,4 +1,7 @@
+import copy
 import random
+from collections import defaultdict
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -61,8 +64,8 @@ class FeatureScaler:
 
 # Data augmentation 
 
-def augment_static(inputs, labels, n_copies=3, noise_std=0.04):
-    """Gaussian noise + curl scale jitter — roughly triples the training set."""
+def augment_static(inputs, labels, n_copies=4, noise_std=0.04):
+    """Gaussian noise + curl scale jitter + feature dropout — 4× training set."""
     aug_x = list(inputs)
     aug_y = list(labels)
 
@@ -70,18 +73,21 @@ def augment_static(inputs, labels, n_copies=3, noise_std=0.04):
         arr = np.array(vec, dtype=np.float32)
         for _ in range(n_copies):
             noisy = arr + np.random.normal(0, noise_std, arr.shape).astype(np.float32)
-            scale = float(np.random.uniform(0.88, 1.12))
+            scale = float(np.random.uniform(0.85, 1.15))
             # Scale curl values for both hands
             for ci in list(range(5)) + list(range(11, 16)):
                 if ci < len(noisy):
                     noisy[ci] = float(np.clip(noisy[ci] * scale, 0.0, 1.0))
+            # Feature dropout: randomly zero ~5% of features to prevent co-adaptation
+            feat_mask = (np.random.random(noisy.shape) > 0.05).astype(np.float32)
+            noisy = noisy * feat_mask
             aug_x.append(noisy.tolist())
             aug_y.append(lbl)
 
     return aug_x, aug_y
 
 
-def augment_dynamic(inputs, labels, n_copies=1, noise_std=0.02):
+def augment_dynamic(inputs, labels, n_copies=2, noise_std=0.02):
     """Time-stretch ±20% + Gaussian noise — doubles the training set."""
     aug_x = list(inputs)
     aug_y = list(labels)
@@ -110,6 +116,16 @@ def augment_dynamic(inputs, labels, n_copies=1, noise_std=0.02):
             copy_n = min(DYNAMIC_FRAMES, new_n)
             out[:copy_n] = stretched[:copy_n]
             out += np.random.normal(0, noise_std, out.shape).astype(np.float32)
+
+            # Random frame masking: zero out 0–2 frames (forces robustness to missing frames)
+            n_mask = np.random.randint(0, 3)
+            if n_mask > 0:
+                mask_idx = np.random.choice(DYNAMIC_FRAMES, n_mask, replace=False)
+                out[mask_idx] = 0.0
+
+            # Feature dropout: zero ~5% of features per frame
+            feat_mask = (np.random.random(out.shape) > 0.05).astype(np.float32)
+            out = out * feat_mask
 
             aug_x.append(out.flatten().tolist())
             aug_y.append(lbl)
@@ -334,7 +350,7 @@ class PyTorchNN:
 
 class GestureLSTM(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, output_size,
-                 dropout=0.3, bidirectional=True):
+                 dropout=0.35, bidirectional=True):
         super().__init__()
         self.hidden_size   = hidden_size
         self.num_layers    = num_layers
@@ -342,29 +358,36 @@ class GestureLSTM(nn.Module):
         nd = 2 if bidirectional else 1
         dim = hidden_size * nd
 
-        self.lstm    = nn.LSTM(input_size, hidden_size, num_layers,
-                               batch_first=True,
-                               dropout=dropout if num_layers > 1 else 0.0,
-                               bidirectional=bidirectional)
+        self.input_norm    = nn.LayerNorm(input_size)
+        self.lstm          = nn.LSTM(input_size, hidden_size, num_layers,
+                                     batch_first=True,
+                                     dropout=dropout if num_layers > 1 else 0.0,
+                                     bidirectional=bidirectional)
         # Multi-head-style attention: two parallel attention heads averaged
-        self.attn1   = nn.Linear(dim, 1)
-        self.attn2   = nn.Linear(dim, 1)
-        self.dropout = nn.Dropout(dropout)
-        self.norm    = nn.LayerNorm(dim)
-        # Classification head with an extra hidden layer for richer representation
-        self.fc1     = nn.Linear(dim, dim // 2)
-        self.act     = nn.GELU()
-        self.fc2     = nn.Linear(dim // 2, output_size)
+        self.attn1         = nn.Linear(dim, 1)
+        self.attn2         = nn.Linear(dim, 1)
+        self.dropout       = nn.Dropout(dropout)
+        self.norm          = nn.LayerNorm(dim)
+        # Residual projection: direct path from mean input → output space
+        # Helps with static gestures (mean IS the pose) and stabilises gradients
+        self.residual_proj = nn.Linear(input_size, dim)
+        # Classification head
+        self.fc1           = nn.Linear(dim, dim // 2)
+        self.act           = nn.GELU()
+        self.fc2           = nn.Linear(dim // 2, output_size)
 
     def forward(self, x):
-        nd = 2 if self.bidirectional else 1
-        h0 = torch.zeros(self.num_layers * nd, x.size(0), self.hidden_size).to(x.device)
-        c0 = torch.zeros(self.num_layers * nd, x.size(0), self.hidden_size).to(x.device)
-        out, _ = self.lstm(x, (h0, c0))   # (B, T, dim)
-        # Two-head temporal attention — each head attends to different time scales
+        x   = self.input_norm(x)           # per-frame feature normalisation
+        nd  = 2 if self.bidirectional else 1
+        h0  = torch.zeros(self.num_layers * nd, x.size(0), self.hidden_size).to(x.device)
+        c0  = torch.zeros(self.num_layers * nd, x.size(0), self.hidden_size).to(x.device)
+        out, _ = self.lstm(x, (h0, c0))    # (B, T, dim)
+        # Two-head temporal attention
         w1  = torch.softmax(self.attn1(out), dim=1)
         w2  = torch.softmax(self.attn2(out), dim=1)
         ctx = ((w1 + w2) / 2.0 * out).sum(dim=1)
+        # Residual: add mean-pooled input projection to skip LSTM for simple poses
+        ctx = ctx + self.residual_proj(x.mean(dim=1))
         h   = self.norm(ctx)
         return self.fc2(self.dropout(self.act(self.fc1(self.dropout(h)))))
 
@@ -587,11 +610,12 @@ class UnifiedLSTMModel:
         self.val_accuracy    = 0.0
         self.loss            = 1.0
         self.epochs          = 0
-        self.hidden_size     = 192      # up from 128 — richer temporal representations
+        self.hidden_size     = 256      # up from 192 — richer temporal representations
         self.num_layers      = 2
         self._output_size    = 0
         self._input_size     = DYNAMIC_FEATURES   # 41 — used by nn_predict validation
         self.per_gesture_acc = {}
+        self.scaler          = FeatureScaler()
 
     def initialize(self, num_classes, gesture_list, gesture_types=None):
         self._output_size = num_classes
@@ -620,20 +644,32 @@ class UnifiedLSTMModel:
     def _prepare_batch(self, sequences):
         return np.array([self._prepare_one(s) for s in sequences], dtype=np.float32)
 
+    def _scale_seq(self, seq_2d: np.ndarray) -> np.ndarray:
+        """Apply z-score per-feature scaling to a (T, F) array."""
+        if not self.scaler.fitted:
+            return seq_2d
+        return (seq_2d - self.scaler.mean_) / self.scaler.std_
+
     # ------------------------------------------------------------------
-    def train_batch(self, inputs, labels, epochs=10, lr=0.001):
+    def train_batch(self, inputs, labels, epochs=30, lr=0.001, progress_cb=None):
         if not inputs or self.model is None:
             return
 
         n = len(inputs)
 
-        # 20 % held-out validation split
+        # Stratified 20% validation split — each gesture class gets val samples
         if n >= 5:
-            val_n     = max(1, int(n * 0.2))
-            idx_all   = list(range(n))
-            random.shuffle(idx_all)
-            val_idx   = idx_all[:val_n]
-            train_idx = idx_all[val_n:]
+            by_class: dict = defaultdict(list)
+            for i, lbl in enumerate(labels):
+                by_class[lbl].append(i)
+            train_idx, val_idx = [], []
+            for lbl, idxs in sorted(by_class.items()):
+                random.shuffle(idxs)
+                n_val = max(1, int(len(idxs) * 0.2)) if len(idxs) >= 3 else 0
+                val_idx.extend(idxs[:n_val])
+                train_idx.extend(idxs[n_val:])
+            random.shuffle(train_idx)
+            random.shuffle(val_idx)
         else:
             train_idx = list(range(n))
             val_idx   = []
@@ -659,7 +695,12 @@ class UnifiedLSTMModel:
         tr_in = s_in + d_in
         tr_lb = s_lb + d_lb
 
-        X = torch.tensor(self._prepare_batch(tr_in), dtype=torch.float32).to(DEVICE)
+        # Prepare raw sequences, fit scaler on all training frames, then scale
+        tr_raw     = self._prepare_batch(tr_in)               # (N, T, F)
+        all_frames = tr_raw.reshape(-1, DYNAMIC_FEATURES)     # (N*T, F)
+        self.scaler.fit(all_frames)
+        tr_sc = np.array([self._scale_seq(s) for s in tr_raw])
+        X = torch.tensor(tr_sc, dtype=torch.float32).to(DEVICE)
         y = torch.tensor(tr_lb, dtype=torch.long).to(DEVICE)
 
         try:
@@ -670,34 +711,80 @@ class UnifiedLSTMModel:
         except Exception:
             crit = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-        opt   = optim.Adam(self.model.parameters(), lr=lr, weight_decay=1e-4)
-        sched = optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
+        # AdamW: decoupled weight decay for better generalisation
+        opt   = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=1e-3)
+        # Warm-restart cosine LR: escapes local minima and reduces variance
+        sched = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            opt, T_0=max(10, epochs // 3), eta_min=lr * 0.01
+        )
 
-        # Mini-batch training: 32 samples per step for better gradient estimates
-        BATCH_SIZE = min(32, len(tr_in))
-        n_train    = len(tr_in)
-        perm       = torch.randperm(n_train)
+        BATCH_SIZE  = min(32, len(tr_in))
+        n_train     = len(tr_in)
+        perm        = torch.randperm(n_train)
+        check_every = max(1, epochs // 10)   # how often to snapshot best val
+
+        best_val_acc  = -1.0
+        best_state    = None
+        last_ep_loss  = 1.0
+        report_every  = max(1, epochs // 10)   # stream progress ~10 times per run
 
         self.model.train()
         for ep in range(epochs):
-            # Shuffle mini-batches each epoch
-            ep_perm = perm[torch.randperm(n_train)]
-            ep_loss = torch.tensor(0.0)
-            steps   = 0
+            ep_perm    = perm[torch.randperm(n_train)]
+            ep_loss_sum = 0.0
+            n_steps     = 0
             for start in range(0, n_train, BATCH_SIZE):
                 idx_b = ep_perm[start:start + BATCH_SIZE]
                 xb    = X[idx_b]
                 yb    = y[idx_b]
                 opt.zero_grad()
-                loss  = crit(self.model(xb), yb)
+
+                # Mixup augmentation (50% of batches) — reduces overfitting
+                if len(xb) >= 2 and torch.rand(1).item() < 0.5:
+                    lam   = float(np.random.beta(0.3, 0.3))
+                    idx_m = torch.randperm(len(xb), device=DEVICE)
+                    xb_m  = lam * xb + (1 - lam) * xb[idx_m]
+                    logit = self.model(xb_m)
+                    loss  = lam * crit(logit, yb) + (1 - lam) * crit(logit, yb[idx_m])
+                else:
+                    loss = crit(self.model(xb), yb)
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 opt.step()
-                ep_loss = ep_loss + loss.detach()
-                steps  += 1
-            ep_loss = ep_loss / max(1, steps)
-            if ep % 5 == 0:
-                sched.step(ep_loss)
+                ep_loss_sum += loss.item()
+                n_steps     += 1
+
+            sched.step()
+            last_ep_loss = ep_loss_sum / max(1, n_steps)
+
+            # Periodic best-checkpoint snapshot — restores best val model at end
+            if vl_in and (ep + 1) % check_every == 0:
+                self.model.eval()
+                with torch.no_grad():
+                    chk_raw = self._prepare_batch(vl_in)
+                    chk_sc  = np.array([self._scale_seq(s) for s in chk_raw])
+                    Xv_chk  = torch.tensor(chk_sc, dtype=torch.float32).to(DEVICE)
+                    yv_chk  = torch.tensor(vl_lb,  dtype=torch.long).to(DEVICE)
+                    v_acc   = float((self.model(Xv_chk).argmax(1) == yv_chk).float().mean())
+                if v_acc >= best_val_acc:
+                    best_val_acc = v_acc
+                    best_state   = copy.deepcopy(self.model.state_dict())
+                self.model.train()
+
+            # Stream live progress stats so the frontend shows incremental updates
+            if progress_cb and (ep + 1) % report_every == 0:
+                progress_cb({
+                    "epoch":        ep + 1,
+                    "total_epochs": epochs,
+                    "progress_pct": round((ep + 1) / epochs * 100),
+                    "train_loss":   round(last_ep_loss, 4),
+                    "val_acc":      round(best_val_acc, 4) if best_val_acc >= 0 else None,
+                })
+
+        # Restore the epoch with best validation accuracy — prevents overfitting
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
 
         self.model.eval()
         with torch.no_grad():
@@ -708,7 +795,9 @@ class UnifiedLSTMModel:
 
             self.val_accuracy = 0.0
             if vl_in:
-                Xv = torch.tensor(self._prepare_batch(vl_in), dtype=torch.float32).to(DEVICE)
+                vl_raw = self._prepare_batch(vl_in)
+                vl_sc  = np.array([self._scale_seq(s) for s in vl_raw])
+                Xv = torch.tensor(vl_sc, dtype=torch.float32).to(DEVICE)
                 yv = torch.tensor(vl_lb, dtype=torch.long).to(DEVICE)
                 vp = self.model(Xv).argmax(dim=1)
                 self.val_accuracy = float((vp == yv).float().mean().item())
@@ -728,7 +817,7 @@ class UnifiedLSTMModel:
             return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": False}
 
         self.model.eval()
-        seq = self._prepare_one(features)
+        seq = self._scale_seq(self._prepare_one(features))
         X   = torch.tensor(seq[np.newaxis], dtype=torch.float32).to(DEVICE)
         with torch.no_grad():
             probs = torch.softmax(self.model(X), dim=1)[0]
@@ -756,6 +845,7 @@ class UnifiedLSTMModel:
         self.loss            = 1.0
         self.epochs          = 0
         self.per_gesture_acc = {}
+        self.scaler          = FeatureScaler()
 
     def to_json(self):
         state = {k: v.tolist() for k, v in self.model.state_dict().items()} if self.model else {}
@@ -773,6 +863,7 @@ class UnifiedLSTMModel:
             "output_size":     self._output_size,
             "per_gesture_acc": self.per_gesture_acc,
             "feature_version": self.feature_version,
+            "scaler":          self.scaler.to_dict(),
         }
 
     def from_json(self, d):
@@ -780,7 +871,7 @@ class UnifiedLSTMModel:
         if not gesture_list:
             return
 
-        self.hidden_size   = d.get("hidden_size",   192)
+        self.hidden_size   = d.get("hidden_size",   256)
         self.num_layers    = d.get("num_layers",    2)
         self._output_size  = d.get("output_size",   len(gesture_list))
         self.feature_version = d.get("feature_version", FEATURE_VERSION)
@@ -802,3 +893,5 @@ class UnifiedLSTMModel:
         self.epochs          = d.get("epochs",       0)
         self.per_gesture_acc = d.get("per_gesture_acc", {})
         self.trained         = bool(d.get("state_dict"))
+        if d.get("scaler"):
+            self.scaler.from_dict(d["scaler"])

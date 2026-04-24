@@ -49,8 +49,8 @@ MP_MODEL  = Path(__file__).parent / "hand_landmarker.task"
 
 #  Global model instance — single bidirectional LSTM for all gestures
 
-unified_nn      = UnifiedLSTMModel()
-_conf_threshold = 0.65
+unified_nn          = UnifiedLSTMModel()
+_conf_threshold     = 0.65
 
 _train_lock = asyncio.Lock()
 
@@ -98,7 +98,41 @@ async def push(event, data=None):
     await manager.broadcast({"event": event, **(data or {})})
 
 
-#  MediaPipe (server-side, optional) 
+class PredictionBuffer:
+    """Rolling majority-vote smoother — stabilises live gesture predictions."""
+
+    def __init__(self, window: int = 7, min_votes: int = 4):
+        self.window    = window
+        self.min_votes = min_votes
+        self._buf: list = []   # [(name, conf), ...]
+
+    def push(self, name: str, conf: float):
+        self._buf.append((name, conf))
+        if len(self._buf) > self.window:
+            self._buf.pop(0)
+
+    def smooth(self, raw: dict) -> dict:
+        """Return a smoothed copy of *raw*.
+        Sets below_threshold=True when the buffer hasn't converged on a stable gesture."""
+        if not self._buf:
+            return raw
+        names = [n for n, _ in self._buf]
+        best  = max(set(names), key=names.count)
+        votes = names.count(best)
+        if votes < self.min_votes:
+            return {**raw, "below_threshold": True}
+        avg_conf = sum(c for n, c in self._buf if n == best) / votes
+        return {**raw, "name": best, "conf": round(avg_conf, 4)}
+
+    def reset(self):
+        self._buf.clear()
+
+
+_pred_buffer        = PredictionBuffer()
+_gesture_thresholds: dict = {}   # per-gesture override; falls back to _conf_threshold
+
+
+#  MediaPipe (server-side, optional)
 
 _mp_ready      = False
 _mp_landmarker = None
@@ -154,7 +188,12 @@ def _landmarks_to_features(lm):
     sz = lm[17].z - lm[5].z
     ls = math.sqrt(sx**2 + sy**2 + sz**2) or 0.001
 
-    return curls + hd + [sx/ls * 0.1, sy/ls * 0.1, sz/ls * 0.1]
+    dom   = curls + hd + [sx/ls * 0.1, sy/ls * 0.1, sz/ls * 0.1]  # 11 features
+    aux   = [0.0] * 11   # auxiliary hand not detected server-side
+    face  = [0.0] * 10   # face features not extracted server-side
+    pose  = [0.0] * 6    # pose features not extracted server-side
+    flags = [1.0, 0.0, 0.0]  # dom_present, aux_absent, face_absent
+    return (dom + aux + face + pose + flags)[:STATIC_FEATURES]
 
 
 #  MQTT subscriber 
@@ -258,7 +297,7 @@ def start_mqtt_subscriber():
 
 @asynccontextmanager
 async def lifespan(app):
-    global _conf_threshold
+    global _conf_threshold, _gesture_thresholds
 
     init_db()
     build_base_model()
@@ -269,6 +308,13 @@ async def lifespan(app):
         row = db.execute("SELECT value FROM settings WHERE key='conf_threshold'").fetchone()
         if row:
             _conf_threshold = float(row['value'])
+
+        for r in db.execute(
+            "SELECT key, value FROM settings WHERE key LIKE 'conf_threshold_%'"
+        ).fetchall():
+            gesture = r['key'][len('conf_threshold_'):]
+            if gesture:
+                _gesture_thresholds[gesture] = float(r['value'])
 
         # Auto-load the most recently saved unified model so predictions work
         # immediately after a server restart without any frontend action
@@ -333,7 +379,7 @@ class NNTrainRequest(BaseModel):
     model_type: str
     inputs:     list
     labels:     list
-    epochs:     int   = 10
+    epochs:     int   = 30
     lr:         float = 0.001
 
 class PredictRequest(BaseModel):
@@ -423,11 +469,32 @@ async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
         return {"error": "model not initialised — call /api/nn/init first",
                 "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
 
+    _loop = asyncio.get_running_loop()
+
+    def _progress(stats):
+        """Called from the executor thread — safely pushes progress via WebSocket."""
+        asyncio.run_coroutine_threadsafe(
+            push("train_progress", {
+                "model":        req.model_type,
+                "epoch":        stats["epoch"],
+                "total_epochs": stats["total_epochs"],
+                "progress_pct": stats["progress_pct"],
+                "train_loss":   stats.get("train_loss"),
+                "val_acc":      stats.get("val_acc"),
+                "complete":     False,
+            }),
+            _loop,
+        )
+
     # run_in_executor keeps the event loop responsive during the blocking PyTorch work
     async with _train_lock:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, unified_nn.train_batch, req.inputs, req.labels, req.epochs, req.lr)
+        await loop.run_in_executor(
+            None,
+            lambda: unified_nn.train_batch(req.inputs, req.labels, req.epochs, req.lr, _progress),
+        )
 
+    # Final complete push — frontend uses complete:true to stop the progress bar
     await push("train_progress", {
         "model":           req.model_type,
         "accuracy":        unified_nn.accuracy,
@@ -435,6 +502,8 @@ async def nn_train(req: NNTrainRequest, _: None = Depends(require_admin)):
         "loss":            unified_nn.loss,
         "epochs":          unified_nn.epochs,
         "per_gesture_acc": unified_nn.per_gesture_acc,
+        "progress_pct":    100,
+        "complete":        True,
     })
     log_session("train_batch", detail=f"{req.model_type} acc={unified_nn.accuracy:.3f} val={unified_nn.val_accuracy:.3f}")
     return {
@@ -450,7 +519,16 @@ def nn_predict(req: PredictRequest):
     if not unified_nn.trained:
         return {"idx": -1, "conf": 0.0, "probs": [], "name": "Unknown", "below_threshold": True}
 
-    result = unified_nn.predict(req.features, _conf_threshold)
+    # Get raw prediction without threshold so smoother sees all candidates
+    raw = unified_nn.predict(req.features, conf_threshold=0.0)
+
+    # Apply per-gesture threshold (falls back to global)
+    threshold = _gesture_thresholds.get(raw["name"], _conf_threshold)
+    raw["below_threshold"] = raw["conf"] < threshold
+
+    # Feed into rolling smoother and return stabilised prediction
+    _pred_buffer.push(raw["name"], raw["conf"])
+    result = _pred_buffer.smooth(raw)
 
     if result["conf"] > 0.3:
         with get_db() as db:
@@ -498,12 +576,14 @@ def nn_load(model_type: str, source: str = 'camera'):
         return {"ok": False, "error": f"no saved unified model for '{model_id}'"}
 
     unified_nn.from_json(json.loads(row['data']))
+    _pred_buffer.reset()
     return {"ok": True, "accuracy": unified_nn.accuracy, "epochs": unified_nn.epochs,
             "gestures": list(unified_nn.gestures.items())}
 
 @app.post("/api/nn/reset/{model_type}")
 async def nn_reset(model_type: str):
     unified_nn.reset()
+    _pred_buffer.reset()
     with get_db() as db:
         db.execute("DELETE FROM models WHERE id LIKE 'unified_%'")
     await push("model_reset", {"model": model_type})
@@ -513,6 +593,7 @@ async def nn_reset(model_type: str):
 @app.post("/api/nn/reset_all")
 async def nn_reset_all(_: None = Depends(require_admin)):
     unified_nn.reset()
+    _pred_buffer.reset()
     with get_db() as db:
         db.execute("DELETE FROM models")
     await push("model_reset", {"model": "all"})
@@ -588,18 +669,26 @@ def save_samples(req: SampleSaveRequest):
     return {"ok": True, "total": count}
 
 @app.get("/api/samples/load")
-def load_samples(source: str = 'all'):
+def load_samples(source: str = 'all', min_quality: float = 0.3):
     result = {}
     with get_db() as db:
         if source == 'all':
-            s_rows = db.execute("SELECT gesture,sample FROM static_samples ORDER BY created_at")
-            d_rows = db.execute("SELECT gesture,frames FROM dynamic_samples ORDER BY created_at")
-        else:
             s_rows = db.execute(
-                "SELECT gesture,sample FROM static_samples WHERE source=? ORDER BY created_at", (source,)
+                "SELECT gesture,sample FROM static_samples WHERE quality >= ? ORDER BY created_at",
+                (min_quality,)
             )
             d_rows = db.execute(
-                "SELECT gesture,frames FROM dynamic_samples WHERE source=? ORDER BY created_at", (source,)
+                "SELECT gesture,frames FROM dynamic_samples WHERE quality >= ? ORDER BY created_at",
+                (min_quality,)
+            )
+        else:
+            s_rows = db.execute(
+                "SELECT gesture,sample FROM static_samples WHERE source=? AND quality >= ? ORDER BY created_at",
+                (source, min_quality)
+            )
+            d_rows = db.execute(
+                "SELECT gesture,frames FROM dynamic_samples WHERE source=? AND quality >= ? ORDER BY created_at",
+                (source, min_quality)
             )
 
         for row in s_rows:
@@ -1065,6 +1154,26 @@ async def update_sentence(req: SentenceRequest):
 
 
 # -- Settings --
+
+@app.get("/api/settings/conf_thresholds")
+def get_all_gesture_thresholds():
+    return {"global": _conf_threshold, "per_gesture": _gesture_thresholds}
+
+@app.get("/api/settings/conf_threshold/{gesture}")
+def get_gesture_threshold(gesture: str):
+    return {"gesture": gesture, "threshold": _gesture_thresholds.get(gesture, _conf_threshold)}
+
+@app.post("/api/settings/conf_threshold/{gesture}")
+def set_gesture_threshold(gesture: str, req: ConfThresholdRequest):
+    global _gesture_thresholds
+    val = max(0.0, min(1.0, req.threshold))
+    _gesture_thresholds[gesture] = val
+    with get_db() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO settings VALUES(?,?)",
+            (f"conf_threshold_{gesture}", str(val)),
+        )
+    return {"ok": True, "gesture": gesture, "threshold": val}
 
 @app.get("/api/settings/{key}")
 def get_setting(key: str):
