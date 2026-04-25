@@ -398,9 +398,11 @@ export class AppController {
   // ── Training ──────────────────────────────────────────────────────────────
   async trainModel() {
     if (this.trainCtrl.isTraining) return;
+    // Capture source NOW before training starts — user may switch toggle mid-training (BUG #18 fix)
+    var trainedSource = window._trainSource || 'camera';
     await this.trainCtrl.train();
-    // Re-sync samples from DB so in-memory cache matches persisted state
-    await this.gestureModel.loadFromDB();
+    // Re-sync samples from DB using the source that was active when training began
+    await this.gestureModel.loadFromDB(trainedSource);
     await this._refreshTrainMeta();
     this.view.render();
   }
@@ -477,25 +479,34 @@ export class AppController {
       this.view.render();
 
       var unsub = eventBus.on(Events.FEATURES_EXTRACTED, function(data) {
-        var result = self.trainCtrl.pushRecordingFrame(data.features, data.handCount || 1);
-        if (result === 'aborted') {
-          unsub();
-          showStatus('Hand lost during recording — please try again', '#fb7185', 3000);
-          window._lastSampledGesture = null;
-          self.view.render();
-          return;
-        }
-        if (result === 'done') {
-          unsub();
-          self._refreshTrainMeta().then(function() {
-            var meta2 = window._trainMeta || {};
-            var dbCount2 = (meta2[gestureName] && meta2[gestureName].dynamic) || '?';
-            showStatus('Saved "' + gestureName + '" dynamic — ' + dbCount2 + ' in DB', '#4ade80', 2800);
-            window._lastSampledGesture = gestureName;
+        self.trainCtrl.pushRecordingFrame(data.features, data.handCount || 1)
+          .then(function(result) {
+            if (result === 'aborted') {
+              unsub();
+              showStatus('Hand lost during recording — please try again', '#fb7185', 3000);
+              window._lastSampledGesture = null;
+              self.view.render();
+              return;
+            }
+            if (result === 'done') {
+              unsub();
+              self._refreshTrainMeta().then(function() {
+                var meta2 = window._trainMeta || {};
+                var dbCount2 = (meta2[gestureName] && meta2[gestureName].dynamic) || '?';
+                showStatus('Saved "' + gestureName + '" dynamic — ' + dbCount2 + ' in DB', '#4ade80', 2800);
+                window._lastSampledGesture = gestureName;
+                self.view.render();
+                setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
+              });
+            }
+          })
+          .catch(function(e) {
+            unsub();
+            console.error('[AppController] dynamic save failed:', e);
+            showStatus('Failed to save gesture — please try again', '#fb7185', 3000);
+            window._lastSampledGesture = null;
             self.view.render();
-            setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
           });
-        }
       });
     }
   }

@@ -755,7 +755,7 @@ async def save_samples(req: SampleSaveRequest, background_tasks: BackgroundTasks
                     (req.gesture, json.dumps(s), q, req.source, now),
                 )
             count = db.execute(
-                "SELECT COUNT(*) FROM static_samples WHERE gesture=?", (req.gesture,)
+                "SELECT COUNT(*) FROM static_samples WHERE gesture=? AND source=?", (req.gesture, req.source)
             ).fetchone()[0]
         else:
             for s in req.samples:
@@ -765,7 +765,7 @@ async def save_samples(req: SampleSaveRequest, background_tasks: BackgroundTasks
                     (req.gesture, json.dumps(s), q, req.source, now),
                 )
             count = db.execute(
-                "SELECT COUNT(*) FROM dynamic_samples WHERE gesture=?", (req.gesture,)
+                "SELECT COUNT(*) FROM dynamic_samples WHERE gesture=? AND source=?", (req.gesture, req.source)
             ).fetchone()[0]
         db.execute("UPDATE gesture_registry SET updated_at=? WHERE name=?", (now, req.gesture))
 

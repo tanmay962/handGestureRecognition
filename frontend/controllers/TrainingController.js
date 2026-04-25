@@ -142,8 +142,8 @@ export class TrainingController {
   }
 
   // Called every frame by AppController during dynamic recording
-  // Returns: 'done' | 'aborted' | 'recording'
-  pushRecordingFrame(features, handCount) {
+  // Returns Promise resolving to: 'done' | 'aborted' | 'recording'
+  async pushRecordingFrame(features, handCount) {
     if (this._dynAborted) return 'aborted';
 
     // Track hand loss — abort if lost too many consecutive frames
@@ -162,13 +162,14 @@ export class TrainingController {
       this._dynLostFrames = 0; // reset on hand re-detected
     }
 
-    var done = this.gm.pushFrame(features);
+    var gestureName = this.gm.recordTarget;
+    var done = await this.gm.pushFrame(features);
     eventBus.emit(Events.RECORDING_TICK, {
       frame: this.gm.frameBuffer.length,
       total: APP_CONFIG.NN.DYNAMIC_FRAMES,
     });
     if (done) {
-      eventBus.emit(Events.RECORDING_DONE, { gesture: this.gm.recordTarget, aborted: false });
+      eventBus.emit(Events.RECORDING_DONE, { gesture: gestureName, aborted: false });
       return 'done';
     }
     return 'recording';

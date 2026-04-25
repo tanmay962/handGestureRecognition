@@ -514,7 +514,8 @@ class UnifiedLSTMModel:
                     break
 
             # ── Lightweight progress callback (every prog_every epochs) ─────
-            if progress_cb and (ep + 1) % prog_every == 0:
+            # Use elif to prevent double-firing when check_every and prog_every land on same epoch (BUG #9 fix)
+            elif progress_cb and (ep + 1) % prog_every == 0:
                 progress_cb({
                     "epoch":        ep + 1,
                     "total_epochs": epochs,

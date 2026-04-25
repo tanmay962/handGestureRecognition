@@ -18,9 +18,10 @@ export class GestureModel {
     this.trainSource    = 'camera'; // 'camera' | 'glove' — set by AppController
   }
 
-  async loadFromDB() {
+  // source param: optional override — if omitted, uses this.trainSource (BUG #18 fix: caller can pin the source)
+  async loadFromDB(source) {
     try {
-      var loadUrl = API + '/samples/load?source=' + this.trainSource;
+      var loadUrl = API + '/samples/load?source=' + (source || this.trainSource);
       var metaUrl = API + '/samples/meta';
 
       var results = await Promise.all([
@@ -103,27 +104,33 @@ export class GestureModel {
 
   async addDynamicSamples(name, trajectories, source) {
     source = source || this.trainSource;
+    // Save to server FIRST — update in-memory only after server confirms (BUG #13 fix)
+    var saveRes = await fetch(API + '/samples/save', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({gesture: name, samples: trajectories, sample_type: 'dynamic', source: source})
+    });
+    if (!saveRes.ok) throw new Error('Server returned ' + saveRes.status);
+    // Server confirmed — safe to update in-memory state
     if (!this.dynamicSamples[name]) this.dynamicSamples[name] = [];
     this.dynamicSamples[name].push.apply(this.dynamicSamples[name], trajectories);
     if (!this.sampleCounts[name]) this.sampleCounts[name] = {static:0,dynamic:0,static_camera:0,static_glove:0,dynamic_camera:0,dynamic_glove:0};
     this.sampleCounts[name].dynamic++;
     if (source === 'camera') this.sampleCounts[name].dynamic_camera++;
     else if (source === 'glove') this.sampleCounts[name].dynamic_glove++;
-
-    await fetch(API + '/samples/save', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({gesture: name, samples: trajectories, sample_type: 'dynamic', source: source})
-    });
   }
 
-  pushFrame(features) {
+  // BUG #14 fix: async so recording state is cleared synchronously but save is awaited before returning true
+  async pushFrame(features) {
     if (!this.recording) return false;
     this.frameBuffer.push([...features]);
     if (this.frameBuffer.length >= APP_CONFIG.NN.DYNAMIC_FRAMES) {
       var trajectory = this.frameBuffer.flat ? this.frameBuffer.flat() :
         [].concat.apply([], this.frameBuffer);
-      this.addDynamicSamples(this.recordTarget, [trajectory], this.trainSource);
+      // Clear state immediately to prevent double-recording while save is in flight
+      var target = this.recordTarget;
+      var src    = this.trainSource;
       this.frameBuffer = []; this.recording = false;
+      await this.addDynamicSamples(target, [trajectory], src);
       return true;
     }
     return false;
