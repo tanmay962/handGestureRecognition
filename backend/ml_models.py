@@ -1,4 +1,5 @@
 import copy
+import gc
 import math
 import random
 from collections import defaultdict
@@ -11,6 +12,12 @@ import torch.optim as optim
 from database import DYNAMIC_FEATURES, DYNAMIC_FRAMES, score_sample_quality
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Limit PyTorch CPU threads — reduces parallelism overhead on low-RAM servers
+torch.set_num_threads(2)
+
+# Max training samples (before augmentation) to cap peak RAM usage on free-tier hosts
+_MAX_TRAIN_SAMPLES = 600
 FEATURE_VERSION = "1.0"
 
 
@@ -55,7 +62,7 @@ class FeatureScaler:
             self.fitted = True
 
 
-def augment_static(inputs, labels, n_copies=6, noise_std=0.04):
+def augment_static(inputs, labels, n_copies=3, noise_std=0.04):
     aug_x = list(inputs)
     aug_y = list(labels)
 
@@ -75,7 +82,7 @@ def augment_static(inputs, labels, n_copies=6, noise_std=0.04):
     return aug_x, aug_y
 
 
-def augment_dynamic(inputs, labels, n_copies=3, noise_std=0.02):
+def augment_dynamic(inputs, labels, n_copies=2, noise_std=0.02):
     aug_x = list(inputs)
     aug_y = list(labels)
 
@@ -200,8 +207,8 @@ class UnifiedLSTMModel:
         self.val_accuracy    = 0.0
         self.loss            = 1.0
         self.epochs          = 0
-        self.hidden_size     = 256
-        self.num_layers      = 2
+        self.hidden_size     = 96   # reduced from 256 to fit 512MB RAM (free-tier hosting)
+        self.num_layers      = 1   # reduced from 2 — attention layer compensates
         self._output_size    = 0
         self._input_size     = DYNAMIC_FEATURES
         self.per_gesture_acc       = {}
@@ -340,6 +347,20 @@ class UnifiedLSTMModel:
 
         n = len(inputs)
 
+        # Cap total samples before augmentation to keep peak RAM under 512MB
+        if n > _MAX_TRAIN_SAMPLES:
+            by_class = defaultdict(list)
+            for i, lbl in enumerate(labels):
+                by_class[lbl].append(i)
+            keep = []
+            per_class = max(1, _MAX_TRAIN_SAMPLES // max(1, len(by_class)))
+            for lbl, idxs in by_class.items():
+                random.shuffle(idxs)
+                keep.extend(idxs[:per_class])
+            inputs = [inputs[i] for i in keep]
+            labels = [labels[i] for i in keep]
+            n = len(inputs)
+
         if n >= 5:
             by_class = defaultdict(list)
             for i, lbl in enumerate(labels):
@@ -360,6 +381,10 @@ class UnifiedLSTMModel:
         tr_lb = [labels[i] for i in train_idx]
         vl_in = [inputs[i] for i in val_idx]
         vl_lb = [labels[i] for i in val_idx]
+
+        # Free the original inputs list — it's large and no longer needed
+        del inputs
+        gc.collect()
 
         s_in, s_lb, d_in, d_lb = [], [], [], []
         for inp, lbl in zip(tr_in, tr_lb):
@@ -387,6 +412,8 @@ class UnifiedLSTMModel:
         orig_raw   = self._prepare_batch(s_in + d_in)
         all_frames = orig_raw.reshape(-1, DYNAMIC_FEATURES)
         self.scaler.fit(all_frames)
+        del orig_raw, all_frames   # scaler stored mean/std — originals no longer needed
+        gc.collect()
 
         if len(s_in) >= 4:
             s_in, s_lb = augment_static(s_in, s_lb)
@@ -395,11 +422,16 @@ class UnifiedLSTMModel:
 
         tr_in = s_in + d_in
         tr_lb = s_lb + d_lb
+        del s_in, d_in  # free before building numpy arrays
 
         tr_raw = self._prepare_batch(tr_in)
-        tr_sc  = np.array([self._scale_seq(s) for s in tr_raw])
+        del tr_in       # free Python list — numpy array holds the data now
+        tr_sc  = np.array([self._scale_seq(s) for s in tr_raw], dtype=np.float32)
+        del tr_raw      # free raw numpy — scaled copy is enough
         X = torch.tensor(tr_sc, dtype=torch.float32).to(DEVICE)
+        del tr_sc       # free numpy — tensor holds the data now
         y = torch.tensor(tr_lb, dtype=torch.long).to(DEVICE)
+        gc.collect()    # reclaim freed arrays before training loop allocates gradients
 
         try:
             counts = torch.bincount(y, minlength=len(self.gestures)).float()
@@ -479,8 +511,10 @@ class UnifiedLSTMModel:
                     # Confusion-aware dynamic weights — only in second half of training
                     if ep >= epochs // 2:
                         vl_r_ = self._prepare_batch(vl_in)
-                        vl_s_ = np.array([self._scale_seq(s) for s in vl_r_])
+                        vl_s_ = np.array([self._scale_seq(s) for s in vl_r_], dtype=np.float32)
+                        del vl_r_
                         Xv_   = torch.tensor(vl_s_, dtype=torch.float32).to(DEVICE)
+                        del vl_s_
                         yv_   = torch.tensor(vl_lb,  dtype=torch.long).to(DEVICE)
                         with torch.no_grad():
                             vp_ = self.model(Xv_).argmax(dim=1)
@@ -490,6 +524,7 @@ class UnifiedLSTMModel:
                             if m_.sum() > 0:
                                 cls_acc = (vp_[m_] == yv_[m_]).float().mean().item()
                                 new_w[ci] = w[ci] * (1.0 + max(0.0, 0.8 - cls_acc))
+                        del Xv_, yv_, vp_
                         new_w = new_w / new_w.sum() * len(self.gestures)
                         crit  = nn.CrossEntropyLoss(weight=new_w.to(DEVICE), label_smoothing=0.1)
 
@@ -530,6 +565,8 @@ class UnifiedLSTMModel:
                 k: torch.stack([s[k].float() for s in swa_states]).mean(0).to(DEVICE)
                 for k in swa_states[0]
             }
+            del swa_states   # free all snapshot copies now that avg is computed
+            gc.collect()
             if vl_in and best_state is not None:
                 self.model.load_state_dict(swa_avg)
                 self.model.eval()
@@ -539,8 +576,11 @@ class UnifiedLSTMModel:
                 # else keep swa_avg (already loaded)
             else:
                 self.model.load_state_dict(swa_avg)
+            del swa_avg
         elif best_state is not None:
             self.model.load_state_dict(best_state)
+        del best_state
+        gc.collect()
 
         self.model.eval()
         with torch.no_grad():
