@@ -452,8 +452,8 @@ class UnifiedLSTMModel:
             return max(0.01, 0.5 * (1.0 + math.cos(math.pi * progress)))
         sched = optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
-        BATCH_SIZE  = min(32, len(tr_in))
-        n_train     = len(tr_in)
+        BATCH_SIZE  = min(32, X.shape[0])
+        n_train     = X.shape[0]
         # Validation + weight-rebalance interval (every 10% of epochs)
         check_every = max(1, epochs // 10)
         # Lightweight progress-only update interval (every ~2% of epochs so bar moves smoothly)

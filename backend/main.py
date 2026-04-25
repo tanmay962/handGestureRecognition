@@ -602,18 +602,21 @@ async def nn_train(req: NNTrainRequest):
 @app.post("/api/nn/train_from_db")
 async def nn_train_from_db(req: NNTrainFromDBRequest):
     """Train directly from DB samples — avoids large client→server upload (phone-friendly)."""
-    # Load samples filtered by source first (no registry filter yet)
+    # Load samples filtered by source first (no registry filter yet).
+    # Use inclusive source filter: match the requested source OR samples with no source tag
+    # (older captures before source tracking was added). Quality threshold is lenient (0.1)
+    # so mobile-captured samples with lower variance scores are not excluded.
     with get_db() as db:
         if req.source == 'all':
-            s_list = list(db.execute("SELECT gesture, sample FROM static_samples WHERE quality >= 0.3"))
-            d_list = list(db.execute("SELECT gesture, frames  FROM dynamic_samples WHERE quality >= 0.3"))
+            s_list = list(db.execute("SELECT gesture, sample FROM static_samples WHERE quality >= 0.1"))
+            d_list = list(db.execute("SELECT gesture, frames  FROM dynamic_samples WHERE quality >= 0.1"))
         else:
             s_list = list(db.execute(
-                "SELECT gesture, sample FROM static_samples WHERE source=? AND quality >= 0.3",
+                "SELECT gesture, sample FROM static_samples WHERE (source=? OR source IS NULL OR source='') AND quality >= 0.1",
                 (req.source,)
             ))
             d_list = list(db.execute(
-                "SELECT gesture, frames FROM dynamic_samples WHERE source=? AND quality >= 0.3",
+                "SELECT gesture, frames FROM dynamic_samples WHERE (source=? OR source IS NULL OR source='') AND quality >= 0.1",
                 (req.source,)
             ))
 
@@ -1556,4 +1559,12 @@ app.mount("/", StaticFiles(directory=str(FRONTEND), html=True), name="frontend")
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Use SSL certs if present — required for camera access from phone over local network
+    cert = Path(__file__).parent / "cert.pem"
+    key  = Path(__file__).parent / "key.pem"
+    if cert.exists() and key.exists():
+        print(f"[SSL] Running HTTPS on port {port} — open https://<your-mac-ip>:{port} on phone")
+        uvicorn.run(app, host="0.0.0.0", port=port, ssl_certfile=str(cert), ssl_keyfile=str(key))
+    else:
+        print(f"[HTTP] Running on port {port} — camera only works on localhost (Mac browser)")
+        uvicorn.run(app, host="0.0.0.0", port=port)
