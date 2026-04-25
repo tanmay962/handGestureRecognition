@@ -69,7 +69,7 @@ export function renderTrainTab(state) {
 
   // ── TRAIN PANEL ──────────────────────────────────────────────────────────────
   html += _renderTrainPanel(trainStats, isTraining, progress, readyCount, totalCount,
-    totalSamples, needsRetrain, newSince, confThresh, perGestAcc, sTrained, dTrained);
+    totalSamples, needsRetrain, newSince, confThresh, perGestAcc, sTrained, dTrained, meta, trainSource);
 
   // ── DIVIDER — capture section ─────────────────────────────────────────────
   html += '<div style="display:flex;align-items:center;gap:10px;margin:16px 0 10px">' +
@@ -96,13 +96,39 @@ export function renderTrainTab(state) {
 
 function _renderTrainPanel(trainStats, isTraining, progress,
     readyCount, totalCount, totalSamples, needsRetrain, newSince,
-    confThresh, perGestAcc, sTrained, dTrained) {
+    confThresh, perGestAcc, sTrained, dTrained, meta, trainSource) {
 
   var sAcc   = _get(trainStats, 'staticAccuracy',  0);
   var sValAc = _get(trainStats, 'valAccuracy',      0);
   var sLoss  = _get(trainStats, 'staticLoss',       1);
   var sEp    = _get(trainStats, 'staticEpochs',     0);
   var trained = sTrained || dTrained;
+
+  // ── Data quality / imbalance warning ──────────────────────────────────────
+  // Detects when one gesture dominates (>50% of total) OR any gesture has <5 samples.
+  var srcCamKey = 'static_camera'; var srcDynKey = 'dynamic_camera';
+  if (trainSource === 'glove') { srcCamKey = 'static_glove'; srcDynKey = 'dynamic_glove'; }
+  var gk; var gestCounts = []; var maxGestCount = 0;
+  for (gk in meta) {
+    var gc2 = (meta[gk][srcCamKey] || 0) + (meta[gk][srcDynKey] || 0);
+    if (gc2 > 0) { gestCounts.push({ name: gk, count: gc2 }); if (gc2 > maxGestCount) maxGestCount = gc2; }
+  }
+  var qualityWarnMsg = null;
+  if (gestCounts.length >= 2 && totalSamples > 0) {
+    var dominantGests = [];
+    for (var gi2 = 0; gi2 < gestCounts.length; gi2++) {
+      if (gestCounts[gi2].count / totalSamples > 0.50) dominantGests.push(gestCounts[gi2].name);
+    }
+    var lowSampleGests = [];
+    for (var gi3 = 0; gi3 < gestCounts.length; gi3++) {
+      if (gestCounts[gi3].count < 5) lowSampleGests.push(gestCounts[gi3].name);
+    }
+    if (dominantGests.length > 0) {
+      qualityWarnMsg = '"' + dominantGests.join('", "') + '" has >50% of all samples — model will be biased. Capture equal samples per gesture for best accuracy.';
+    } else if (lowSampleGests.length > 0) {
+      qualityWarnMsg = '"' + lowSampleGests.join('", "') + '" has fewer than 5 samples — capture at least 10–15 per gesture for reliable predictions.';
+    }
+  }
 
   // ── Sample readiness summary ──
   var summaryColor = readyCount === totalCount && totalCount > 0
@@ -111,6 +137,13 @@ function _renderTrainPanel(trainStats, isTraining, progress,
 
   var html = '<div class="cd" style="margin-bottom:12px">';
   html += '<div class="cd-label" style="font-size:11px;font-weight:800;letter-spacing:.12em">TRAIN MODEL</div>';
+
+  // Data quality warning (shown above stats when imbalance detected)
+  if (qualityWarnMsg) {
+    html += '<div style="padding:8px 11px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.35);border-radius:7px;margin-bottom:10px;font-size:9px;color:#fbbf24;line-height:1.5">' +
+      '<strong>Data imbalance detected:</strong> ' + qualityWarnMsg +
+      '</div>';
+  }
 
   // Sample summary row
   html += '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">';
@@ -140,20 +173,30 @@ function _renderTrainPanel(trainStats, isTraining, progress,
   // ── Training progress section (shown while training is in progress) ──
   if (isTraining) {
     var pct = Math.round(progress);
+    var isStarting = pct === 0;
     html += '<div style="margin-bottom:14px;padding:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px">';
     // Header row: spinner + label + percent
     html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
     html += '<span class="spinner"></span>';
-    html += '<span style="font-size:10px;font-weight:700;color:#ffffff;letter-spacing:.08em;flex:1">TRAINING IN PROGRESS</span>';
-    html += '<span style="font-size:11px;font-weight:800;color:#ffffff">' + pct + '%</span>';
+    html += '<span style="font-size:10px;font-weight:700;color:#ffffff;letter-spacing:.08em;flex:1">' +
+      (isStarting ? 'STARTING TRAINING…' : 'TRAINING IN PROGRESS') + '</span>';
+    html += '<span style="font-size:11px;font-weight:800;color:#ffffff">' + (isStarting ? '–' : pct + '%') + '</span>';
     html += '</div>';
-    // Animated progress bar — striped shimmer while active
-    html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
-    html += '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.6);border-radius:3px;transition:width .4s ease;' +
-      'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.35) 50%,rgba(255,255,255,0) 100%);' +
-      'background-size:200% 100%;animation:shimmer 1.4s linear infinite"></div>';
-    html += '</div>';
-    if (pct > 0) {
+    // Animated progress bar — full shimmer when starting (indeterminate), fill when running
+    if (isStarting) {
+      // Indeterminate bar — shows activity even before first epoch progress arrives
+      html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
+      html += '<div style="width:100%;height:100%;' +
+        'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.45) 50%,rgba(255,255,255,0) 100%);' +
+        'background-size:200% 100%;animation:shimmer 1.2s linear infinite"></div>';
+      html += '</div>';
+      html += '<div style="font-size:8px;color:var(--mx);margin-top:5px">Loading samples from server…</div>';
+    } else {
+      html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
+      html += '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.6);border-radius:3px;transition:width .4s ease;' +
+        'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.35) 50%,rgba(255,255,255,0) 100%);' +
+        'background-size:200% 100%;animation:shimmer 1.4s linear infinite"></div>';
+      html += '</div>';
       html += '<div style="font-size:8px;color:var(--mx);margin-top:5px;text-align:right">' + pct + ' / 100% complete</div>';
     }
     html += '</div>';
@@ -162,7 +205,7 @@ function _renderTrainPanel(trainStats, isTraining, progress,
   // ── Train button (big, full width) ──
   var btnLabel, btnDisabled;
   if (isTraining) {
-    btnLabel    = 'Training… ' + Math.round(progress) + '%';
+    btnLabel    = Math.round(progress) === 0 ? 'Starting Training…' : 'Training… ' + Math.round(progress) + '%';
     btnDisabled = true;
   } else if (!trained) {
     btnLabel    = 'Train on ' + totalSamples + ' Samples';
@@ -238,6 +281,21 @@ function _renderTrainPanel(trainStats, isTraining, progress,
     '</label>';
   html += '</div>';
 
+  // Clear All Samples — prominent destructive action with warning colour
+  html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--brd)">';
+  html += '<div style="font-size:9px;color:var(--mx);margin-bottom:7px;letter-spacing:.08em">RESET TRAINING DATA</div>';
+  html += '<button onclick="window._app.clearAllSamples()" style="' +
+    'width:100%;padding:10px;font-size:11px;font-weight:700;font-family:inherit;' +
+    'background:rgba(251,113,133,0.08);color:#fb7185;' +
+    'border:1px solid rgba(251,113,133,0.35);border-radius:8px;cursor:pointer;' +
+    'letter-spacing:.05em">' +
+    'Clear All Samples & Retrain Fresh' +
+    '</button>';
+  html += '<div style="font-size:8px;color:var(--dm);margin-top:5px">' +
+    'Deletes all captured samples from database. Use when predictions are wrong after training.' +
+    '</div>';
+  html += '</div>';
+
   html += '</div>'; // close .cd
 
   // Per-gesture accuracy (shown below the train card when trained)
@@ -273,21 +331,53 @@ function _renderCameraStrip(state, liveP, countdown) {
   } else {
     livePredHTML =
       '<div style="font-size:8px;color:var(--dm);margin-top:4px">' +
-      (state.camActive ? 'Camera active' : 'Waiting…') +
+      (state.camActive ? 'Camera active' : 'Camera off') +
       ((state.staticTrained || state.dynamicTrained) ? ' · live prediction ON' : ' · train model to enable') +
       '</div>';
   }
 
   var recBorder = state.recording ? 'border-color:var(--r);box-shadow:0 0 18px rgba(251,113,133,.15)' : '';
+  var isBack    = state.facingMode === 'environment';
+  var flipLabel = isBack ? '↩ Front' : '↪ Back';
+  var camErrHTML = state.cameraError
+    ? '<div style="font-size:9px;color:#fb7185;margin-top:4px;line-height:1.4">' + state.cameraError + '</div>'
+    : '';
 
   return '<div style="position:sticky;top:0;z-index:50;padding-bottom:8px;background:var(--bg)">' +
     '<div class="cd" style="margin-bottom:0;' + recBorder + '">' +
+
+    // ── Camera controls row ──────────────────────────────────────────────────
+    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap">' +
+    '<span style="font-size:9px;font-weight:700;color:var(--mx);letter-spacing:.1em;flex:1">CAMERA</span>' +
+    (state.camActive
+      ? '<button onclick="window._app.switchCamera()" style="padding:5px 10px;font-size:9px;font-weight:700;font-family:inherit;' +
+        'background:rgba(255,255,255,0.08);color:#ffffff;border:1px solid rgba(255,255,255,0.3);border-radius:6px;cursor:pointer">' +
+        flipLabel + ' Cam</button>'
+      : '') +
+    (state.camActive
+      ? '<button onclick="window._app.stopCamera()" style="padding:5px 10px;font-size:9px;font-weight:700;font-family:inherit;' +
+        'background:var(--s2);color:#fb7185;border:1px solid rgba(251,113,133,0.3);border-radius:6px;cursor:pointer">Stop</button>'
+      : '<button onclick="window._app.startCamera()" style="padding:5px 10px;font-size:9px;font-weight:700;font-family:inherit;' +
+        'background:rgba(255,255,255,0.08);color:#ffffff;border:1px solid rgba(255,255,255,0.3);border-radius:6px;cursor:pointer">' +
+        (state.cameraError ? 'Retry Camera' : 'Start Camera') + '</button>') +
+    '</div>' +
+
+    // ── Video + finger bars row ───────────────────────────────────────────────
     '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">' +
 
     '<div style="position:relative;width:180px;min-height:130px;border-radius:8px;overflow:hidden;background:var(--s1);border:1px solid ' + (state.recording ? 'var(--r)' : 'var(--brd)') + ';flex-shrink:0">' +
     '<div id="trainVidContainer" style="width:100%;height:100%;min-height:130px"></div>' +
     (!state.camActive
-      ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:8px">Loading…</div></div>'
+      ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none">' +
+        '<div style="font-size:18px">📷</div>' +
+        '<div style="font-size:8px">' + (state.cameraError ? 'Error' : 'Camera off') + '</div>' +
+        '</div>'
+      : '') +
+    (state.camActive
+      ? '<div style="position:absolute;top:5px;left:5px">' +
+        '<span style="font-size:7px;background:rgba(0,0,0,.75);color:rgba(255,255,255,0.7);padding:2px 5px;border-radius:4px;font-weight:700">' +
+        (isBack ? '🔍 BACK' : '🤳 FRONT') + '</span>' +
+        '</div>'
       : '') +
     (state.recording
       ? '<div style="position:absolute;top:5px;right:5px"><span class="bg bg-r" style="font-size:8px"><span class="dot dot-r dot-pulse"></span>REC</span></div>'
@@ -305,6 +395,7 @@ function _renderCameraStrip(state, liveP, countdown) {
     '<div style="font-size:8px;color:var(--mx);letter-spacing:.1em;margin-bottom:4px">LIVE FINGER CURL</div>' +
     fingerBars +
     livePredHTML +
+    camErrHTML +
     '</div>' +
     '</div>' +
     '</div>' +

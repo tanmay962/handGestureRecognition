@@ -182,37 +182,15 @@ export class TrainingController {
   async train() {
     this.isTraining = true;
     this.progress   = 0;
+    this.lastError  = null;
     eventBus.emit(Events.TRAIN_STARTED);
 
     var source = window._trainSource || 'camera';
     var EPOCHS = APP_CONFIG.NN.TRAINING_EPOCHS;
 
-    // Check readiness using already-loaded meta — avoids a large DB fetch on device
-    var meta = window._trainMeta || {};
-    var gesturesWithSamples = 0;
-    var k;
-    for (k in meta) {
-      var sm = meta[k];
-      var hasSta = source === 'camera' ? (sm.static_camera  || 0) > 0 : (sm.static_glove  || 0) > 0;
-      var hasDyn = source === 'camera' ? (sm.dynamic_camera || 0) > 0 : (sm.dynamic_glove || 0) > 0;
-      if (hasSta || hasDyn) gesturesWithSamples++;
-    }
-
-    if (gesturesWithSamples === 0) {
-      this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error:'No samples' });
-      return;
-    }
-
-    if (gesturesWithSamples < 2) {
-      this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error:'Need at least 2 gestures with samples' });
-      return;
-    }
-
     // ── Single lightweight request — backend loads samples from DB ────────
-    // This avoids uploading megabytes of feature vectors from the phone,
-    // so training starts (and progress events begin) almost immediately.
+    // Backend is authoritative — it reads directly from DB with the correct
+    // source filter, so we skip the fragile frontend pre-flight count check.
     var res, data;
     try {
       res  = await fetch(API + '/nn/train_from_db', {
@@ -228,14 +206,16 @@ export class TrainingController {
       data = await res.json();
     } catch(e) {
       this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error: 'Network error: ' + (e.message || String(e)) });
+      this.lastError  = 'Network error — is the server running? (' + (e.message || String(e)) + ')';
+      eventBus.emit(Events.TRAIN_COMPLETE, { error: this.lastError });
       return;
     }
 
-    // Guard: backend returned an error
+    // Guard: backend returned an error or HTTP error status
     if (!res.ok || data.error || data.accuracy == null) {
       this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error: data.error || data.detail || 'Training failed (server error)' });
+      this.lastError  = data.error || data.detail || 'Training failed (server error ' + (res ? res.status : '?') + ')';
+      eventBus.emit(Events.TRAIN_COMPLETE, { error: this.lastError });
       return;
     }
 

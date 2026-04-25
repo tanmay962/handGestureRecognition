@@ -105,6 +105,7 @@ export class AppController {
     eventBus.on(Events.RECOG_STARTED, function() {
       self.camera.setStatus('DETECTING...');
     });
+    eventBus.on(Events.TRAIN_STARTED,      rr);  // immediately show progress bar at 0%
     eventBus.on(Events.TRAIN_PROGRESS,     rr);
     eventBus.on(Events.TRAIN_COMPLETE,     rr);
     eventBus.on(Events.SENTENCE_UPDATED,   rr);
@@ -400,7 +401,39 @@ export class AppController {
     if (this.trainCtrl.isTraining) return;
     // Capture source NOW before training starts — user may switch toggle mid-training (BUG #18 fix)
     var trainedSource = window._trainSource || 'camera';
+
+    // Refresh sample counts before training so the backend has the latest data
+    // and so the TrainView shows accurate numbers immediately
+    await this._refreshTrainMeta();
+
+    // Periodic re-render so progress bar stays alive even when WebSocket events are sparse
+    // (mobile networks can delay WS; this guarantees the UI never looks frozen)
+    var self = this;
+    var _trainPoll = setInterval(function() {
+      if (self.trainCtrl.isTraining) {
+        self.view.render();
+      } else {
+        clearInterval(_trainPoll);
+      }
+    }, 1500);
+
     await this.trainCtrl.train();
+    clearInterval(_trainPoll);
+
+    // Show training error to user if training failed
+    if (this.trainCtrl.lastError) {
+      var statusEl = document.getElementById('trainStatus');
+      if (statusEl) {
+        statusEl.style.display    = 'block';
+        statusEl.textContent      = 'Training failed: ' + this.trainCtrl.lastError;
+        statusEl.style.background = 'rgba(251,113,133,0.9)';
+        statusEl.style.color      = '#000000';
+        statusEl.style.fontWeight = '700';
+        clearTimeout(statusEl._t);
+        statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 10000);
+      }
+    }
+
     // Re-sync samples from DB using the source that was active when training began
     await this.gestureModel.loadFromDB(trainedSource);
     await this._refreshTrainMeta();
@@ -411,6 +444,50 @@ export class AppController {
     if (!confirm('Delete trained model? You will need to retrain.')) return;
     await this.trainCtrl.deleteModel();
     this.view.render();
+  }
+
+  async clearAllSamples() {
+    var source = window._trainSource || 'camera';
+    var label  = source === 'all' ? 'ALL' : source.toUpperCase();
+    if (!confirm('Delete ALL ' + label + ' training samples from the database?\n\nThis cannot be undone. You will need to re-capture and retrain.')) return;
+
+    var statusEl = document.getElementById('trainStatus');
+    function showStatus(msg, bg) {
+      if (!statusEl) return;
+      statusEl.style.display    = 'block';
+      statusEl.textContent      = msg;
+      statusEl.style.background = bg;
+      statusEl.style.color      = '#000000';
+      statusEl.style.fontWeight = '700';
+      clearTimeout(statusEl._t);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 5000);
+    }
+
+    try {
+      var res = await fetch(API + '/samples/clear_source', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ source: source }),
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+
+      // Reset in-memory gesture model state
+      this.gestureModel.staticSamples  = {};
+      this.gestureModel.dynamicSamples = {};
+      this.gestureModel.sampleCounts   = {};
+
+      // Reset trained model state
+      this.trainCtrl.staticNN.reset();
+      this.trainCtrl.dynamicNN.reset();
+      this.trainCtrl.isTraining = false;
+      this.trainCtrl.progress   = 0;
+
+      await this._refreshTrainMeta();
+      this.view.render();
+      showStatus('All ' + label + ' samples cleared. Ready to capture fresh data.', '#4ade80');
+    } catch(e) {
+      showStatus('Clear failed: ' + (e.message || String(e)), 'rgba(251,113,133,0.9)');
+    }
   }
 
   async resetModel() {
@@ -744,6 +821,7 @@ export class AppController {
       mode:            this.appMode,
       camActive:       this.camera.active,
       cameraError:     this._cameraError || null,
+      facingMode:      this.camera.facingMode,
       fps:             this.camera.fps,
       geminiEnabled:   this.gemini.enabled,
       staticTrained:   this.staticNN.trained,

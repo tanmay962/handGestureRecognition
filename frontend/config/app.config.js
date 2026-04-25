@@ -5,7 +5,7 @@
 
 var APP_CONFIG = {
   name: 'Gesture Detection',
-  version: '4.5',
+  version: '4.8',
   DEFAULT_GESTURES: ['Hello','Thank You','Yes','No','Help','Please','Sorry','Stop','Go','Water'],
 
   NN: {
@@ -21,36 +21,40 @@ var APP_CONFIG = {
   },
 
   RECOGNITION: {
-    CONFIDENCE_THRESHOLD:  0.60,
-    // Stability hold — tuned for responsive demo
-    STABLE_MS_LETTER:      500,
-    STABLE_MS_WORD:        750,
-    STABLE_MS_NUMBER:      500,
+    // Raised from 0.60 → 0.72 to suppress false positives from imbalanced/noisy training data
+    CONFIDENCE_THRESHOLD:  0.72,
+    // Stability hold — longer hold reduces jitter from frame-to-frame noise
+    STABLE_MS_LETTER:      700,
+    STABLE_MS_WORD:        950,
+    STABLE_MS_NUMBER:      700,
     // Cooldowns — prevent duplicate confirmations
-    COOLDOWN_SAME_LETTER:  1200,
-    COOLDOWN_DIFF_LETTER:  350,
-    COOLDOWN_WORD:         1500,
-    // Prediction rate limiting — every 2 frames for faster response
+    COOLDOWN_SAME_LETTER:  1500,
+    COOLDOWN_DIFF_LETTER:  500,
+    // Word cooldown raised to 3s — prevents same word re-firing while TTS is still speaking it
+    COOLDOWN_WORD:         3000,
+    // Prediction rate limiting — every 2 frames
     PREDICT_EVERY_N:       2,
-    // Confidence smoothing — 5 frames balances speed + stability
-    CONF_SMOOTH_WINDOW:    5,
+    // Confidence smoothing — 7 frames for smoother averaging (was 5)
+    CONF_SMOOTH_WINDOW:    7,
     // Motion detection threshold for LSTM activation
     MOTION_THRESHOLD:      0.06,
-    DYNAMIC_CONF_THRESH:   0.70,
+    DYNAMIC_CONF_THRESH:   0.72,
     DWELL_TIME:            1500,
     SPELL_PAUSE:           1800,
     // NLP debounce
     NLP_DEBOUNCE_MS:       300,
-    // Ensemble voting
-    ENSEMBLE_WINDOW:       5,
-    // TTS word-queue buffer — words signed within this window are spoken as one phrase
+    // Ensemble voting — wider window for more stable averaged probabilities (was 5)
+    ENSEMBLE_WINDOW:       7,
+    // TTS word-queue buffer
     TTS_BUFFER_MS:         2000,
-    // Hysteresis — keep active gesture alive during brief dips (raised from 0.40 to reduce false drops)
-    HYSTERESIS_EXIT:          0.50,
-    // Streak gate — require 3 consecutive same-gesture frames before starting hold timer
-    MIN_STREAK_FRAMES:        3,
-    // Rejection zone — discard anything below this confidence outright
-    MIN_REJECT_CONF:          0.15,
+    // TTS dedup — same word/phrase suppressed if spoken within this window (ms)
+    TTS_DEDUP_MS:          5000,
+    // Hysteresis — raised from 0.50 to make it harder to drop an active gesture
+    HYSTERESIS_EXIT:          0.60,
+    // Streak gate — require 5 consecutive same-gesture frames (was 3) — kills single-frame noise
+    MIN_STREAK_FRAMES:        5,
+    // Rejection zone — hard floor raised from 0.15 to 0.28 — outright discard weak predictions
+    MIN_REJECT_CONF:          0.28,
     // Dynamic priority margin
     DYNAMIC_PRIORITY_MARGIN:  0.05,
     // Prediction trail

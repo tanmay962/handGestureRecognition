@@ -552,6 +552,13 @@ var RecognitionController = (function() {
       // "H E L L O" being spoken instead of "hello".
     } else {
       this.contextState = 'RECOGNIZING';
+      // Cancel any pending auto-accept timer from a previous letter sequence.
+      // Without this, a letter confirmed just before a word gesture fires would
+      // still auto-accept 1800ms later, producing a spurious NLP-suggested word.
+      if (this._autoAcceptTimer) {
+        clearTimeout(this._autoAcceptTimer);
+        this._autoAcceptTimer = null;
+      }
       if (this.sentence.getSpelling()) {
         this.sentence.addWord(this.sentence.getSpelling());
         this.sentence.clearSpelling();
@@ -690,12 +697,20 @@ var RecognitionController = (function() {
     var self = this;
     if (this._autoAcceptTimer) clearTimeout(this._autoAcceptTimer);
     this._autoAcceptTimer = setTimeout(function() {
-      if (self.sentence.getSpelling() && self.sentence.wordSuggestions.length > 0) {
+      var spelling = self.sentence.getSpelling();
+      if (!spelling) { eventBus.emit(Events.SENTENCE_UPDATED); return; }
+
+      // Only accept an NLP word suggestion if the user has typed ≥2 letters.
+      // A single letter like "A" matches "and", "are", "am" etc. — auto-accepting
+      // those suggestions causes spurious words when the model fires a false "A".
+      var enoughLetters = spelling.length >= 2;
+      if (enoughLetters && self.sentence.wordSuggestions.length > 0) {
         var top = self.sentence.wordSuggestions[0];
         self.sentence.acceptWordSuggestion(top);
         self.nlp.learnWord(top);
         self.tts.speakIfAuto(top);
-      } else if (self.sentence.getSpelling()) {
+      } else if (spelling) {
+        // Commit as-is — either too short for suggestion or no suggestions available
         var spelled = self.sentence.getSpelling();
         self.sentence.addWord(spelled);
         self.nlp.learnWord(spelled);

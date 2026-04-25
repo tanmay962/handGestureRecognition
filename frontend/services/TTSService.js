@@ -100,7 +100,12 @@ export class TTSService {
       if (!/[.!?]$/.test(t)) t += '.';
     }
 
-    window.speechSynthesis.cancel();
+    // Only cancel ongoing speech if TTS is currently speaking something else.
+    // This prevents "Thank You" being cut off to just "thank" when the next
+    // speakIfAuto call fires before the utterance finishes.
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
 
     var u = new SpeechSynthesisUtterance(t);
 
@@ -124,10 +129,24 @@ export class TTSService {
   // ── Auto-speak: buffer words, speak as a phrase after silence ────
   // If another word arrives within TTS_BUFFER_MS, it joins the queue.
   // This prevents choppy word-by-word speech when signing quickly.
+  //
+  // Dedup guard: skips words that were queued within TTS_DEDUP_MS to
+  // prevent the recognition loop from repeating the same phrase every
+  // few seconds when the model keeps re-confirming the same gesture.
   speakIfAuto(word) {
     if (!this.autoSpeak || !word) return;
-    var self = this;
 
+    // Dedup: reject the same word/phrase if it was already spoken recently
+    var key = word.toLowerCase().trim();
+    var now = Date.now();
+    var dedupMs = (APP_CONFIG.RECOGNITION && APP_CONFIG.RECOGNITION.TTS_DEDUP_MS) || 5000;
+    if (this._lastSpokenMap && this._lastSpokenMap[key] && now - this._lastSpokenMap[key] < dedupMs) {
+      return; // suppress — same phrase spoke too recently
+    }
+    if (!this._lastSpokenMap) this._lastSpokenMap = {};
+    this._lastSpokenMap[key] = now;
+
+    var self = this;
     this._wordQueue.push(word);
 
     if (this._wordTimer) clearTimeout(this._wordTimer);

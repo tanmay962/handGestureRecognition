@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-25T04:04:09.834Z
+// Built: 2026-04-25T05:28:01.035Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -13,7 +13,7 @@ var API = '/api';
 // Optimised: rate limiting, confidence smoothing, time-based stability, separate cooldowns
 var APP_CONFIG = {
   name: 'Gesture Detection',
-  version: '4.5',
+  version: '4.8',
   DEFAULT_GESTURES: ['Hello','Thank You','Yes','No','Help','Please','Sorry','Stop','Go','Water'],
 
   NN: {
@@ -29,36 +29,40 @@ var APP_CONFIG = {
   },
 
   RECOGNITION: {
-    CONFIDENCE_THRESHOLD:  0.60,
-    // Stability hold — tuned for responsive demo
-    STABLE_MS_LETTER:      500,
-    STABLE_MS_WORD:        750,
-    STABLE_MS_NUMBER:      500,
+    // Raised from 0.60 → 0.72 to suppress false positives from imbalanced/noisy training data
+    CONFIDENCE_THRESHOLD:  0.72,
+    // Stability hold — longer hold reduces jitter from frame-to-frame noise
+    STABLE_MS_LETTER:      700,
+    STABLE_MS_WORD:        950,
+    STABLE_MS_NUMBER:      700,
     // Cooldowns — prevent duplicate confirmations
-    COOLDOWN_SAME_LETTER:  1200,
-    COOLDOWN_DIFF_LETTER:  350,
-    COOLDOWN_WORD:         1500,
-    // Prediction rate limiting — every 2 frames for faster response
+    COOLDOWN_SAME_LETTER:  1500,
+    COOLDOWN_DIFF_LETTER:  500,
+    // Word cooldown raised to 3s — prevents same word re-firing while TTS is still speaking it
+    COOLDOWN_WORD:         3000,
+    // Prediction rate limiting — every 2 frames
     PREDICT_EVERY_N:       2,
-    // Confidence smoothing — 5 frames balances speed + stability
-    CONF_SMOOTH_WINDOW:    5,
+    // Confidence smoothing — 7 frames for smoother averaging (was 5)
+    CONF_SMOOTH_WINDOW:    7,
     // Motion detection threshold for LSTM activation
     MOTION_THRESHOLD:      0.06,
-    DYNAMIC_CONF_THRESH:   0.70,
+    DYNAMIC_CONF_THRESH:   0.72,
     DWELL_TIME:            1500,
     SPELL_PAUSE:           1800,
     // NLP debounce
     NLP_DEBOUNCE_MS:       300,
-    // Ensemble voting
-    ENSEMBLE_WINDOW:       5,
-    // TTS word-queue buffer — words signed within this window are spoken as one phrase
+    // Ensemble voting — wider window for more stable averaged probabilities (was 5)
+    ENSEMBLE_WINDOW:       7,
+    // TTS word-queue buffer
     TTS_BUFFER_MS:         2000,
-    // Hysteresis — keep active gesture alive during brief dips (raised from 0.40 to reduce false drops)
-    HYSTERESIS_EXIT:          0.50,
-    // Streak gate — require 3 consecutive same-gesture frames before starting hold timer
-    MIN_STREAK_FRAMES:        3,
-    // Rejection zone — discard anything below this confidence outright
-    MIN_REJECT_CONF:          0.15,
+    // TTS dedup — same word/phrase suppressed if spoken within this window (ms)
+    TTS_DEDUP_MS:          5000,
+    // Hysteresis — raised from 0.50 to make it harder to drop an active gesture
+    HYSTERESIS_EXIT:          0.60,
+    // Streak gate — require 5 consecutive same-gesture frames (was 3) — kills single-frame noise
+    MIN_STREAK_FRAMES:        5,
+    // Rejection zone — hard floor raised from 0.15 to 0.28 — outright discard weak predictions
+    MIN_REJECT_CONF:          0.28,
     // Dynamic priority margin
     DYNAMIC_PRIORITY_MARGIN:  0.05,
     // Prediction trail
@@ -1873,7 +1877,12 @@ class TTSService {
       if (!/[.!?]$/.test(t)) t += '.';
     }
 
-    window.speechSynthesis.cancel();
+    // Only cancel ongoing speech if TTS is currently speaking something else.
+    // This prevents "Thank You" being cut off to just "thank" when the next
+    // speakIfAuto call fires before the utterance finishes.
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
 
     var u = new SpeechSynthesisUtterance(t);
 
@@ -1897,10 +1906,24 @@ class TTSService {
   // ── Auto-speak: buffer words, speak as a phrase after silence ────
   // If another word arrives within TTS_BUFFER_MS, it joins the queue.
   // This prevents choppy word-by-word speech when signing quickly.
+  //
+  // Dedup guard: skips words that were queued within TTS_DEDUP_MS to
+  // prevent the recognition loop from repeating the same phrase every
+  // few seconds when the model keeps re-confirming the same gesture.
   speakIfAuto(word) {
     if (!this.autoSpeak || !word) return;
-    var self = this;
 
+    // Dedup: reject the same word/phrase if it was already spoken recently
+    var key = word.toLowerCase().trim();
+    var now = Date.now();
+    var dedupMs = (APP_CONFIG.RECOGNITION && APP_CONFIG.RECOGNITION.TTS_DEDUP_MS) || 5000;
+    if (this._lastSpokenMap && this._lastSpokenMap[key] && now - this._lastSpokenMap[key] < dedupMs) {
+      return; // suppress — same phrase spoke too recently
+    }
+    if (!this._lastSpokenMap) this._lastSpokenMap = {};
+    this._lastSpokenMap[key] = now;
+
+    var self = this;
     this._wordQueue.push(word);
 
     if (this._wordTimer) clearTimeout(this._wordTimer);
@@ -2255,7 +2278,7 @@ function renderTrainTab(state) {
 
   // ── TRAIN PANEL ──────────────────────────────────────────────────────────────
   html += _renderTrainPanel(trainStats, isTraining, progress, readyCount, totalCount,
-    totalSamples, needsRetrain, newSince, confThresh, perGestAcc, sTrained, dTrained);
+    totalSamples, needsRetrain, newSince, confThresh, perGestAcc, sTrained, dTrained, meta, trainSource);
 
   // ── DIVIDER — capture section ─────────────────────────────────────────────
   html += '<div style="display:flex;align-items:center;gap:10px;margin:16px 0 10px">' +
@@ -2282,13 +2305,39 @@ function renderTrainTab(state) {
 
 function _renderTrainPanel(trainStats, isTraining, progress,
     readyCount, totalCount, totalSamples, needsRetrain, newSince,
-    confThresh, perGestAcc, sTrained, dTrained) {
+    confThresh, perGestAcc, sTrained, dTrained, meta, trainSource) {
 
   var sAcc   = _get(trainStats, 'staticAccuracy',  0);
   var sValAc = _get(trainStats, 'valAccuracy',      0);
   var sLoss  = _get(trainStats, 'staticLoss',       1);
   var sEp    = _get(trainStats, 'staticEpochs',     0);
   var trained = sTrained || dTrained;
+
+  // ── Data quality / imbalance warning ──────────────────────────────────────
+  // Detects when one gesture dominates (>50% of total) OR any gesture has <5 samples.
+  var srcCamKey = 'static_camera'; var srcDynKey = 'dynamic_camera';
+  if (trainSource === 'glove') { srcCamKey = 'static_glove'; srcDynKey = 'dynamic_glove'; }
+  var gk; var gestCounts = []; var maxGestCount = 0;
+  for (gk in meta) {
+    var gc2 = (meta[gk][srcCamKey] || 0) + (meta[gk][srcDynKey] || 0);
+    if (gc2 > 0) { gestCounts.push({ name: gk, count: gc2 }); if (gc2 > maxGestCount) maxGestCount = gc2; }
+  }
+  var qualityWarnMsg = null;
+  if (gestCounts.length >= 2 && totalSamples > 0) {
+    var dominantGests = [];
+    for (var gi2 = 0; gi2 < gestCounts.length; gi2++) {
+      if (gestCounts[gi2].count / totalSamples > 0.50) dominantGests.push(gestCounts[gi2].name);
+    }
+    var lowSampleGests = [];
+    for (var gi3 = 0; gi3 < gestCounts.length; gi3++) {
+      if (gestCounts[gi3].count < 5) lowSampleGests.push(gestCounts[gi3].name);
+    }
+    if (dominantGests.length > 0) {
+      qualityWarnMsg = '"' + dominantGests.join('", "') + '" has >50% of all samples — model will be biased. Capture equal samples per gesture for best accuracy.';
+    } else if (lowSampleGests.length > 0) {
+      qualityWarnMsg = '"' + lowSampleGests.join('", "') + '" has fewer than 5 samples — capture at least 10–15 per gesture for reliable predictions.';
+    }
+  }
 
   // ── Sample readiness summary ──
   var summaryColor = readyCount === totalCount && totalCount > 0
@@ -2297,6 +2346,13 @@ function _renderTrainPanel(trainStats, isTraining, progress,
 
   var html = '<div class="cd" style="margin-bottom:12px">';
   html += '<div class="cd-label" style="font-size:11px;font-weight:800;letter-spacing:.12em">TRAIN MODEL</div>';
+
+  // Data quality warning (shown above stats when imbalance detected)
+  if (qualityWarnMsg) {
+    html += '<div style="padding:8px 11px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.35);border-radius:7px;margin-bottom:10px;font-size:9px;color:#fbbf24;line-height:1.5">' +
+      '<strong>Data imbalance detected:</strong> ' + qualityWarnMsg +
+      '</div>';
+  }
 
   // Sample summary row
   html += '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">';
@@ -2326,20 +2382,30 @@ function _renderTrainPanel(trainStats, isTraining, progress,
   // ── Training progress section (shown while training is in progress) ──
   if (isTraining) {
     var pct = Math.round(progress);
+    var isStarting = pct === 0;
     html += '<div style="margin-bottom:14px;padding:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px">';
     // Header row: spinner + label + percent
     html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
     html += '<span class="spinner"></span>';
-    html += '<span style="font-size:10px;font-weight:700;color:#ffffff;letter-spacing:.08em;flex:1">TRAINING IN PROGRESS</span>';
-    html += '<span style="font-size:11px;font-weight:800;color:#ffffff">' + pct + '%</span>';
+    html += '<span style="font-size:10px;font-weight:700;color:#ffffff;letter-spacing:.08em;flex:1">' +
+      (isStarting ? 'STARTING TRAINING…' : 'TRAINING IN PROGRESS') + '</span>';
+    html += '<span style="font-size:11px;font-weight:800;color:#ffffff">' + (isStarting ? '–' : pct + '%') + '</span>';
     html += '</div>';
-    // Animated progress bar — striped shimmer while active
-    html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
-    html += '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.6);border-radius:3px;transition:width .4s ease;' +
-      'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.35) 50%,rgba(255,255,255,0) 100%);' +
-      'background-size:200% 100%;animation:shimmer 1.4s linear infinite"></div>';
-    html += '</div>';
-    if (pct > 0) {
+    // Animated progress bar — full shimmer when starting (indeterminate), fill when running
+    if (isStarting) {
+      // Indeterminate bar — shows activity even before first epoch progress arrives
+      html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
+      html += '<div style="width:100%;height:100%;' +
+        'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.45) 50%,rgba(255,255,255,0) 100%);' +
+        'background-size:200% 100%;animation:shimmer 1.2s linear infinite"></div>';
+      html += '</div>';
+      html += '<div style="font-size:8px;color:var(--mx);margin-top:5px">Loading samples from server…</div>';
+    } else {
+      html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
+      html += '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.6);border-radius:3px;transition:width .4s ease;' +
+        'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.35) 50%,rgba(255,255,255,0) 100%);' +
+        'background-size:200% 100%;animation:shimmer 1.4s linear infinite"></div>';
+      html += '</div>';
       html += '<div style="font-size:8px;color:var(--mx);margin-top:5px;text-align:right">' + pct + ' / 100% complete</div>';
     }
     html += '</div>';
@@ -2348,7 +2414,7 @@ function _renderTrainPanel(trainStats, isTraining, progress,
   // ── Train button (big, full width) ──
   var btnLabel, btnDisabled;
   if (isTraining) {
-    btnLabel    = 'Training… ' + Math.round(progress) + '%';
+    btnLabel    = Math.round(progress) === 0 ? 'Starting Training…' : 'Training… ' + Math.round(progress) + '%';
     btnDisabled = true;
   } else if (!trained) {
     btnLabel    = 'Train on ' + totalSamples + ' Samples';
@@ -2424,6 +2490,21 @@ function _renderTrainPanel(trainStats, isTraining, progress,
     '</label>';
   html += '</div>';
 
+  // Clear All Samples — prominent destructive action with warning colour
+  html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--brd)">';
+  html += '<div style="font-size:9px;color:var(--mx);margin-bottom:7px;letter-spacing:.08em">RESET TRAINING DATA</div>';
+  html += '<button onclick="window._app.clearAllSamples()" style="' +
+    'width:100%;padding:10px;font-size:11px;font-weight:700;font-family:inherit;' +
+    'background:rgba(251,113,133,0.08);color:#fb7185;' +
+    'border:1px solid rgba(251,113,133,0.35);border-radius:8px;cursor:pointer;' +
+    'letter-spacing:.05em">' +
+    'Clear All Samples & Retrain Fresh' +
+    '</button>';
+  html += '<div style="font-size:8px;color:var(--dm);margin-top:5px">' +
+    'Deletes all captured samples from database. Use when predictions are wrong after training.' +
+    '</div>';
+  html += '</div>';
+
   html += '</div>'; // close .cd
 
   // Per-gesture accuracy (shown below the train card when trained)
@@ -2459,21 +2540,53 @@ function _renderCameraStrip(state, liveP, countdown) {
   } else {
     livePredHTML =
       '<div style="font-size:8px;color:var(--dm);margin-top:4px">' +
-      (state.camActive ? 'Camera active' : 'Waiting…') +
+      (state.camActive ? 'Camera active' : 'Camera off') +
       ((state.staticTrained || state.dynamicTrained) ? ' · live prediction ON' : ' · train model to enable') +
       '</div>';
   }
 
   var recBorder = state.recording ? 'border-color:var(--r);box-shadow:0 0 18px rgba(251,113,133,.15)' : '';
+  var isBack    = state.facingMode === 'environment';
+  var flipLabel = isBack ? '↩ Front' : '↪ Back';
+  var camErrHTML = state.cameraError
+    ? '<div style="font-size:9px;color:#fb7185;margin-top:4px;line-height:1.4">' + state.cameraError + '</div>'
+    : '';
 
   return '<div style="position:sticky;top:0;z-index:50;padding-bottom:8px;background:var(--bg)">' +
     '<div class="cd" style="margin-bottom:0;' + recBorder + '">' +
+
+    // ── Camera controls row ──────────────────────────────────────────────────
+    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap">' +
+    '<span style="font-size:9px;font-weight:700;color:var(--mx);letter-spacing:.1em;flex:1">CAMERA</span>' +
+    (state.camActive
+      ? '<button onclick="window._app.switchCamera()" style="padding:5px 10px;font-size:9px;font-weight:700;font-family:inherit;' +
+        'background:rgba(255,255,255,0.08);color:#ffffff;border:1px solid rgba(255,255,255,0.3);border-radius:6px;cursor:pointer">' +
+        flipLabel + ' Cam</button>'
+      : '') +
+    (state.camActive
+      ? '<button onclick="window._app.stopCamera()" style="padding:5px 10px;font-size:9px;font-weight:700;font-family:inherit;' +
+        'background:var(--s2);color:#fb7185;border:1px solid rgba(251,113,133,0.3);border-radius:6px;cursor:pointer">Stop</button>'
+      : '<button onclick="window._app.startCamera()" style="padding:5px 10px;font-size:9px;font-weight:700;font-family:inherit;' +
+        'background:rgba(255,255,255,0.08);color:#ffffff;border:1px solid rgba(255,255,255,0.3);border-radius:6px;cursor:pointer">' +
+        (state.cameraError ? 'Retry Camera' : 'Start Camera') + '</button>') +
+    '</div>' +
+
+    // ── Video + finger bars row ───────────────────────────────────────────────
     '<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">' +
 
     '<div style="position:relative;width:180px;min-height:130px;border-radius:8px;overflow:hidden;background:var(--s1);border:1px solid ' + (state.recording ? 'var(--r)' : 'var(--brd)') + ';flex-shrink:0">' +
     '<div id="trainVidContainer" style="width:100%;height:100%;min-height:130px"></div>' +
     (!state.camActive
-      ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none"><div style="font-size:8px">Loading…</div></div>'
+      ? '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;color:var(--dm);gap:4px;pointer-events:none">' +
+        '<div style="font-size:18px">📷</div>' +
+        '<div style="font-size:8px">' + (state.cameraError ? 'Error' : 'Camera off') + '</div>' +
+        '</div>'
+      : '') +
+    (state.camActive
+      ? '<div style="position:absolute;top:5px;left:5px">' +
+        '<span style="font-size:7px;background:rgba(0,0,0,.75);color:rgba(255,255,255,0.7);padding:2px 5px;border-radius:4px;font-weight:700">' +
+        (isBack ? '🔍 BACK' : '🤳 FRONT') + '</span>' +
+        '</div>'
       : '') +
     (state.recording
       ? '<div style="position:absolute;top:5px;right:5px"><span class="bg bg-r" style="font-size:8px"><span class="dot dot-r dot-pulse"></span>REC</span></div>'
@@ -2491,6 +2604,7 @@ function _renderCameraStrip(state, liveP, countdown) {
     '<div style="font-size:8px;color:var(--mx);letter-spacing:.1em;margin-bottom:4px">LIVE FINGER CURL</div>' +
     fingerBars +
     livePredHTML +
+    camErrHTML +
     '</div>' +
     '</div>' +
     '</div>' +
@@ -3603,6 +3717,13 @@ var RecognitionController = (function() {
       // "H E L L O" being spoken instead of "hello".
     } else {
       this.contextState = 'RECOGNIZING';
+      // Cancel any pending auto-accept timer from a previous letter sequence.
+      // Without this, a letter confirmed just before a word gesture fires would
+      // still auto-accept 1800ms later, producing a spurious NLP-suggested word.
+      if (this._autoAcceptTimer) {
+        clearTimeout(this._autoAcceptTimer);
+        this._autoAcceptTimer = null;
+      }
       if (this.sentence.getSpelling()) {
         this.sentence.addWord(this.sentence.getSpelling());
         this.sentence.clearSpelling();
@@ -3741,12 +3862,20 @@ var RecognitionController = (function() {
     var self = this;
     if (this._autoAcceptTimer) clearTimeout(this._autoAcceptTimer);
     this._autoAcceptTimer = setTimeout(function() {
-      if (self.sentence.getSpelling() && self.sentence.wordSuggestions.length > 0) {
+      var spelling = self.sentence.getSpelling();
+      if (!spelling) { eventBus.emit(Events.SENTENCE_UPDATED); return; }
+
+      // Only accept an NLP word suggestion if the user has typed ≥2 letters.
+      // A single letter like "A" matches "and", "are", "am" etc. — auto-accepting
+      // those suggestions causes spurious words when the model fires a false "A".
+      var enoughLetters = spelling.length >= 2;
+      if (enoughLetters && self.sentence.wordSuggestions.length > 0) {
         var top = self.sentence.wordSuggestions[0];
         self.sentence.acceptWordSuggestion(top);
         self.nlp.learnWord(top);
         self.tts.speakIfAuto(top);
-      } else if (self.sentence.getSpelling()) {
+      } else if (spelling) {
+        // Commit as-is — either too short for suggestion or no suggestions available
         var spelled = self.sentence.getSpelling();
         self.sentence.addWord(spelled);
         self.nlp.learnWord(spelled);
@@ -4010,37 +4139,15 @@ class TrainingController {
   async train() {
     this.isTraining = true;
     this.progress   = 0;
+    this.lastError  = null;
     eventBus.emit(Events.TRAIN_STARTED);
 
     var source = window._trainSource || 'camera';
     var EPOCHS = APP_CONFIG.NN.TRAINING_EPOCHS;
 
-    // Check readiness using already-loaded meta — avoids a large DB fetch on device
-    var meta = window._trainMeta || {};
-    var gesturesWithSamples = 0;
-    var k;
-    for (k in meta) {
-      var sm = meta[k];
-      var hasSta = source === 'camera' ? (sm.static_camera  || 0) > 0 : (sm.static_glove  || 0) > 0;
-      var hasDyn = source === 'camera' ? (sm.dynamic_camera || 0) > 0 : (sm.dynamic_glove || 0) > 0;
-      if (hasSta || hasDyn) gesturesWithSamples++;
-    }
-
-    if (gesturesWithSamples === 0) {
-      this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error:'No samples' });
-      return;
-    }
-
-    if (gesturesWithSamples < 2) {
-      this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error:'Need at least 2 gestures with samples' });
-      return;
-    }
-
     // ── Single lightweight request — backend loads samples from DB ────────
-    // This avoids uploading megabytes of feature vectors from the phone,
-    // so training starts (and progress events begin) almost immediately.
+    // Backend is authoritative — it reads directly from DB with the correct
+    // source filter, so we skip the fragile frontend pre-flight count check.
     var res, data;
     try {
       res  = await fetch(API + '/nn/train_from_db', {
@@ -4056,14 +4163,16 @@ class TrainingController {
       data = await res.json();
     } catch(e) {
       this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error: 'Network error: ' + (e.message || String(e)) });
+      this.lastError  = 'Network error — is the server running? (' + (e.message || String(e)) + ')';
+      eventBus.emit(Events.TRAIN_COMPLETE, { error: this.lastError });
       return;
     }
 
-    // Guard: backend returned an error
+    // Guard: backend returned an error or HTTP error status
     if (!res.ok || data.error || data.accuracy == null) {
       this.isTraining = false;
-      eventBus.emit(Events.TRAIN_COMPLETE, { error: data.error || data.detail || 'Training failed (server error)' });
+      this.lastError  = data.error || data.detail || 'Training failed (server error ' + (res ? res.status : '?') + ')';
+      eventBus.emit(Events.TRAIN_COMPLETE, { error: this.lastError });
       return;
     }
 
@@ -4226,6 +4335,7 @@ class AppController {
     eventBus.on(Events.RECOG_STARTED, function() {
       self.camera.setStatus('DETECTING...');
     });
+    eventBus.on(Events.TRAIN_STARTED,      rr);  // immediately show progress bar at 0%
     eventBus.on(Events.TRAIN_PROGRESS,     rr);
     eventBus.on(Events.TRAIN_COMPLETE,     rr);
     eventBus.on(Events.SENTENCE_UPDATED,   rr);
@@ -4521,7 +4631,39 @@ class AppController {
     if (this.trainCtrl.isTraining) return;
     // Capture source NOW before training starts — user may switch toggle mid-training (BUG #18 fix)
     var trainedSource = window._trainSource || 'camera';
+
+    // Refresh sample counts before training so the backend has the latest data
+    // and so the TrainView shows accurate numbers immediately
+    await this._refreshTrainMeta();
+
+    // Periodic re-render so progress bar stays alive even when WebSocket events are sparse
+    // (mobile networks can delay WS; this guarantees the UI never looks frozen)
+    var self = this;
+    var _trainPoll = setInterval(function() {
+      if (self.trainCtrl.isTraining) {
+        self.view.render();
+      } else {
+        clearInterval(_trainPoll);
+      }
+    }, 1500);
+
     await this.trainCtrl.train();
+    clearInterval(_trainPoll);
+
+    // Show training error to user if training failed
+    if (this.trainCtrl.lastError) {
+      var statusEl = document.getElementById('trainStatus');
+      if (statusEl) {
+        statusEl.style.display    = 'block';
+        statusEl.textContent      = 'Training failed: ' + this.trainCtrl.lastError;
+        statusEl.style.background = 'rgba(251,113,133,0.9)';
+        statusEl.style.color      = '#000000';
+        statusEl.style.fontWeight = '700';
+        clearTimeout(statusEl._t);
+        statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 10000);
+      }
+    }
+
     // Re-sync samples from DB using the source that was active when training began
     await this.gestureModel.loadFromDB(trainedSource);
     await this._refreshTrainMeta();
@@ -4532,6 +4674,50 @@ class AppController {
     if (!confirm('Delete trained model? You will need to retrain.')) return;
     await this.trainCtrl.deleteModel();
     this.view.render();
+  }
+
+  async clearAllSamples() {
+    var source = window._trainSource || 'camera';
+    var label  = source === 'all' ? 'ALL' : source.toUpperCase();
+    if (!confirm('Delete ALL ' + label + ' training samples from the database?\n\nThis cannot be undone. You will need to re-capture and retrain.')) return;
+
+    var statusEl = document.getElementById('trainStatus');
+    function showStatus(msg, bg) {
+      if (!statusEl) return;
+      statusEl.style.display    = 'block';
+      statusEl.textContent      = msg;
+      statusEl.style.background = bg;
+      statusEl.style.color      = '#000000';
+      statusEl.style.fontWeight = '700';
+      clearTimeout(statusEl._t);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 5000);
+    }
+
+    try {
+      var res = await fetch(API + '/samples/clear_source', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ source: source }),
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+
+      // Reset in-memory gesture model state
+      this.gestureModel.staticSamples  = {};
+      this.gestureModel.dynamicSamples = {};
+      this.gestureModel.sampleCounts   = {};
+
+      // Reset trained model state
+      this.trainCtrl.staticNN.reset();
+      this.trainCtrl.dynamicNN.reset();
+      this.trainCtrl.isTraining = false;
+      this.trainCtrl.progress   = 0;
+
+      await this._refreshTrainMeta();
+      this.view.render();
+      showStatus('All ' + label + ' samples cleared. Ready to capture fresh data.', '#4ade80');
+    } catch(e) {
+      showStatus('Clear failed: ' + (e.message || String(e)), 'rgba(251,113,133,0.9)');
+    }
   }
 
   async resetModel() {
@@ -4865,6 +5051,7 @@ class AppController {
       mode:            this.appMode,
       camActive:       this.camera.active,
       cameraError:     this._cameraError || null,
+      facingMode:      this.camera.facingMode,
       fps:             this.camera.fps,
       geminiEnabled:   this.gemini.enabled,
       staticTrained:   this.staticNN.trained,
