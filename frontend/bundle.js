@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-25T02:32:19.239Z
+// Built: 2026-04-25T03:43:03.948Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -13,7 +13,7 @@ var API = '/api';
 // Optimised: rate limiting, confidence smoothing, time-based stability, separate cooldowns
 var APP_CONFIG = {
   name: 'Gesture Detection',
-  version: '1.0',
+  version: '4.5',
   DEFAULT_GESTURES: ['Hello','Thank You','Yes','No','Help','Please','Sorry','Stop','Go','Water'],
 
   NN: {
@@ -4012,80 +4012,55 @@ class TrainingController {
     this.progress   = 0;
     eventBus.emit(Events.TRAIN_STARTED);
 
-    // Load only samples for the active source
-    this.gm.trainSource = window._trainSource || 'camera';
-    await this.gm.loadFromDB();
+    var source = window._trainSource || 'camera';
+    var EPOCHS = APP_CONFIG.NN.TRAINING_EPOCHS;
 
-    var sd = this.gm.getStaticTrainingData();
-    var dd = this.gm.getDynamicTrainingData();
+    // Check readiness using already-loaded meta — avoids a large DB fetch on device
+    var meta = window._trainMeta || {};
+    var gesturesWithSamples = 0;
+    var k;
+    for (k in meta) {
+      var sm = meta[k];
+      var hasSta = source === 'camera' ? (sm.static_camera  || 0) > 0 : (sm.static_glove  || 0) > 0;
+      var hasDyn = source === 'camera' ? (sm.dynamic_camera || 0) > 0 : (sm.dynamic_glove || 0) > 0;
+      if (hasSta || hasDyn) gesturesWithSamples++;
+    }
 
-    if (sd.inputs.length === 0 && dd.inputs.length === 0) {
+    if (gesturesWithSamples === 0) {
       this.isTraining = false;
       eventBus.emit(Events.TRAIN_COMPLETE, { error:'No samples' });
       return;
     }
 
-    // ── Build unified gesture list (static first, then dynamic-only) ────
-    var allNames = sd.names.slice();
-    for (var di = 0; di < dd.names.length; di++) {
-      if (allNames.indexOf(dd.names[di]) === -1) allNames.push(dd.names[di]);
-    }
-
-    if (allNames.length < 2) {
+    if (gesturesWithSamples < 2) {
       this.isTraining = false;
       eventBus.emit(Events.TRAIN_COMPLETE, { error:'Need at least 2 gestures with samples' });
       return;
     }
 
-    // Map name → unified index
-    var nameToIdx = {};
-    for (var ni = 0; ni < allNames.length; ni++) nameToIdx[allNames[ni]] = ni;
-
-    // Which gestures are primarily static vs dynamic
-    var gestureTypes = {};
-    for (var si2 = 0; si2 < sd.names.length; si2++) gestureTypes[sd.names[si2]] = 'static';
-    for (var di2 = 0; di2 < dd.names.length; di2++) gestureTypes[dd.names[di2]] = 'dynamic';
-
-    // ── Build combined inputs + labels ───────────────────────────────────
-    // Static inputs:  41-feature vectors — backend repeats to fill sequence
-    // Dynamic inputs: DYNAMIC_FRAMES*41-feature flat sequences
-    var allInputs = [];
-    var allLabels = [];
-    for (var si3 = 0; si3 < sd.inputs.length; si3++) {
-      allInputs.push(sd.inputs[si3]);
-      allLabels.push(nameToIdx[sd.names[sd.labels[si3]]]);
+    // ── Single lightweight request — backend loads samples from DB ────────
+    // This avoids uploading megabytes of feature vectors from the phone,
+    // so training starts (and progress events begin) almost immediately.
+    var res, data;
+    try {
+      res  = await fetch(API + '/nn/train_from_db', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          model_type:      'unified',
+          epochs:          EPOCHS,
+          lr:              0.001,
+          source:          source,
+          feature_version: APP_CONFIG.NN.FEATURE_VERSION,
+        })
+      });
+      data = await res.json();
+    } catch(e) {
+      this.isTraining = false;
+      eventBus.emit(Events.TRAIN_COMPLETE, { error: 'Network error: ' + (e.message || String(e)) });
+      return;
     }
-    for (var di3 = 0; di3 < dd.inputs.length; di3++) {
-      allInputs.push(dd.inputs[di3]);
-      allLabels.push(nameToIdx[dd.names[dd.labels[di3]]]);
-    }
 
-    // ── Single init call ─────────────────────────────────────────────────
-    await fetch(API + '/nn/init', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        model_type:    'unified',
-        output_size:   allNames.length,
-        gestures:      allNames,
-        gesture_types: gestureTypes,
-        feature_version: APP_CONFIG.NN.FEATURE_VERSION,
-      })
-    });
-
-    // ── Train unified BiLSTM — single call, backend handles SWA + warmup ────
-    var EPOCHS = APP_CONFIG.NN.TRAINING_EPOCHS;
-    var lr     = (dd.inputs.length > 0) ? 0.001 : 0.008;
-
-    // Progress updates come via WebSocket train_progress events (handled in AppController).
-    // A single fetch lets the backend run the full training pipeline uninterrupted.
-    var res  = await fetch(API + '/nn/train', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ model_type:'unified', inputs:allInputs, labels:allLabels, epochs:EPOCHS, lr:lr })
-    });
-    var data = await res.json();
-
-    // Guard: backend returned an error (e.g. 401 admin PIN, 500 internal error)
-    // NOTE: do NOT use !data.accuracy — that is falsy for 0.0 and would hide a real (if low) result
+    // Guard: backend returned an error
     if (!res.ok || data.error || data.accuracy == null) {
       this.isTraining = false;
       eventBus.emit(Events.TRAIN_COMPLETE, { error: data.error || data.detail || 'Training failed (server error)' });
@@ -4108,7 +4083,7 @@ class TrainingController {
     window._perGestAcc.static  = data.per_gesture_acc || {};
     window._perGestAcc.dynamic = data.per_gesture_acc || {};
 
-    await fetch(API + '/nn/save/unified?source=' + (window._trainSource||'camera'), { method:'POST' });
+    await fetch(API + '/nn/save/unified?source=' + source, { method:'POST' });
 
     this.isTraining = false;
     this.progress   = 100;
@@ -4386,7 +4361,7 @@ class AppController {
 
     this._startLivePredictionLoop();
     await this._autoCamera();
-    console.log('[SignLens v6.1] Ready — Phase 2 (two-hand + adaptive NLP)');
+    console.log('[SignLens v4.5] Ready — Phase 2 (two-hand + adaptive NLP)');
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────────

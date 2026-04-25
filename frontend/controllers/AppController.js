@@ -240,7 +240,7 @@ export class AppController {
 
     this._startLivePredictionLoop();
     await this._autoCamera();
-    console.log('[SignLens v6.1] Ready — Phase 2 (two-hand + adaptive NLP)');
+    console.log('[SignLens v4.5] Ready — Phase 2 (two-hand + adaptive NLP)');
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────────

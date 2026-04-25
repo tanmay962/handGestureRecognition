@@ -5,7 +5,7 @@
 
 var APP_CONFIG = {
   name: 'Gesture Detection',
-  version: '1.0',
+  version: '4.5',
   DEFAULT_GESTURES: ['Hello','Thank You','Yes','No','Help','Please','Sorry','Stop','Go','Water'],
 
   NN: {

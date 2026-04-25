@@ -602,19 +602,7 @@ async def nn_train(req: NNTrainRequest):
 @app.post("/api/nn/train_from_db")
 async def nn_train_from_db(req: NNTrainFromDBRequest):
     """Train directly from DB samples — avoids large client→server upload (phone-friendly)."""
-    # Load gesture registry
-    with get_db() as db:
-        gesture_rows = list(db.execute(
-            "SELECT name, gesture_type FROM gesture_registry WHERE training_enabled=1 ORDER BY name"
-        ))
-
-    all_names     = [r['name'] for r in gesture_rows]
-    gesture_types = {r['name']: r['gesture_type'] for r in gesture_rows}
-
-    if not all_names:
-        return {"error": "No gestures registered", "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
-
-    # Load samples filtered by source
+    # Load samples filtered by source first (no registry filter yet)
     with get_db() as db:
         if req.source == 'all':
             s_list = list(db.execute("SELECT gesture, sample FROM static_samples WHERE quality >= 0.3"))
@@ -629,11 +617,19 @@ async def nn_train_from_db(req: NNTrainFromDBRequest):
                 (req.source,)
             ))
 
-    sampled_gestures = {row['gesture'] for row in s_list} | {row['gesture'] for row in d_list}
-    if len(sampled_gestures) < 2:
+    # Build gesture list from the samples themselves — works even if registry is sparse
+    gestures_with_samples = sorted({row['gesture'] for row in s_list} | {row['gesture'] for row in d_list})
+
+    if len(gestures_with_samples) < 2:
         return {"error": "Need at least 2 gestures with samples", "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
 
-    gesture_idx = {g: i for i, g in enumerate(all_names)}
+    # Determine gesture types: prefer registry, fall back to 'static'
+    with get_db() as db:
+        reg_rows = list(db.execute("SELECT name, gesture_type FROM gesture_registry"))
+    reg_types = {r['name']: r['gesture_type'] for r in reg_rows}
+    gesture_types = {g: reg_types.get(g, 'static') for g in gestures_with_samples}
+
+    gesture_idx = {g: i for i, g in enumerate(gestures_with_samples)}
     all_inputs, all_labels = [], []
     for row in s_list:
         g = row['gesture']
@@ -649,7 +645,7 @@ async def nn_train_from_db(req: NNTrainFromDBRequest):
     if not all_inputs:
         return {"error": "No valid samples found", "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
 
-    unified_nn.initialize(len(all_names), all_names, gesture_types)
+    unified_nn.initialize(len(gestures_with_samples), gestures_with_samples, gesture_types)
     unified_nn.feature_version = req.feature_version
 
     _loop = asyncio.get_running_loop()
