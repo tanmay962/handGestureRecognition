@@ -20,7 +20,6 @@ export class GestureModel {
 
   async loadFromDB() {
     try {
-      var url = API + '/samples/meta';
       var loadUrl = API + '/samples/load?source=' + this.trainSource;
       var metaUrl = API + '/samples/meta';
 
@@ -30,6 +29,7 @@ export class GestureModel {
       ]);
       var meta = results[0]; var samples = results[1];
 
+      // Rebuild counts from authoritative DB meta
       this.sampleCounts = {};
       for (var g in meta) {
         this.sampleCounts[g] = {
@@ -42,11 +42,19 @@ export class GestureModel {
         };
         if (this.gestures.indexOf(g) < 0) this.gestures.push(g);
       }
-      for (var g in samples) {
-        if (samples[g].static)  this.staticSamples[g]  = samples[g].static;
-        if (samples[g].dynamic) this.dynamicSamples[g] = samples[g].dynamic;
+      // Replace sample vectors from DB — DB is the source of truth.
+      // Use DB data only when it has more or equal samples vs in-memory cache
+      // so that samples captured right before loadFromDB() are never dropped.
+      for (var gName in samples) {
+        var dbStatic  = samples[gName].static  || [];
+        var dbDynamic = samples[gName].dynamic || [];
+        var memStatic  = this.staticSamples[gName]  || [];
+        var memDynamic = this.dynamicSamples[gName] || [];
+        // Accept DB version if it has at least as many samples (it's fully persisted)
+        if (dbStatic.length  >= memStatic.length)  this.staticSamples[gName]  = dbStatic;
+        if (dbDynamic.length >= memDynamic.length) this.dynamicSamples[gName] = dbDynamic;
       }
-      console.log('[GestureModel] loaded from Python DB:', Object.keys(meta).length, 'gestures, source:', this.trainSource);
+      console.log('[GestureModel] loaded from DB:', Object.keys(meta).length, 'gestures, source:', this.trainSource);
     } catch(e) { console.warn('[GestureModel] load failed:', e); }
   }
 

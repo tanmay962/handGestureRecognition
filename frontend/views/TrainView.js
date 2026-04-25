@@ -137,14 +137,25 @@ function _renderTrainPanel(trainStats, isTraining, progress,
     html += '</div>';
   }
 
-  // Training progress bar (shown during training)
+  // ── Training progress section (shown while training is in progress) ──
   if (isTraining) {
-    html += '<div style="margin-bottom:12px">';
-    html += '<div style="display:flex;justify-content:space-between;margin-bottom:5px">';
-    html += '<span style="font-size:9px;color:var(--mx);letter-spacing:.08em">TRAINING IN PROGRESS</span>';
-    html += '<span style="font-size:9px;font-weight:700;color:#ffffff">' + Math.round(progress) + '%</span>';
+    var pct = Math.round(progress);
+    html += '<div style="margin-bottom:14px;padding:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px">';
+    // Header row: spinner + label + percent
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    html += '<span class="spinner"></span>';
+    html += '<span style="font-size:10px;font-weight:700;color:#ffffff;letter-spacing:.08em;flex:1">TRAINING IN PROGRESS</span>';
+    html += '<span style="font-size:11px;font-weight:800;color:#ffffff">' + pct + '%</span>';
     html += '</div>';
-    html += Bar(progress);
+    // Animated progress bar — striped shimmer while active
+    html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
+    html += '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.6);border-radius:3px;transition:width .4s ease;' +
+      'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.35) 50%,rgba(255,255,255,0) 100%);' +
+      'background-size:200% 100%;animation:shimmer 1.4s linear infinite"></div>';
+    html += '</div>';
+    if (pct > 0) {
+      html += '<div style="font-size:8px;color:var(--mx);margin-top:5px;text-align:right">' + pct + ' / 100% complete</div>';
+    }
     html += '</div>';
   }
 
@@ -164,16 +175,25 @@ function _renderTrainPanel(trainStats, isTraining, progress,
     btnDisabled = totalSamples === 0;
   }
 
-  html += '<button ' +
-    'style="width:100%;padding:13px;font-size:12px;font-weight:800;font-family:inherit;' +
-    'background:' + (btnDisabled ? 'var(--s2)' : 'rgba(255,255,255,0.1)') + ';' +
-    'color:' + (btnDisabled ? 'var(--dm)' : '#ffffff') + ';' +
-    'border:1px solid ' + (btnDisabled ? 'var(--brd)' : 'rgba(255,255,255,0.35)') + ';' +
+  // Button: show spinner inside when training, pulse border when clickable with samples ready
+  var btnBg     = isTraining ? 'var(--s2)' : (btnDisabled ? 'var(--s2)' : 'rgba(255,255,255,0.1)');
+  var btnColor  = btnDisabled ? 'rgba(255,255,255,0.35)' : '#ffffff';
+  var btnBorder = isTraining ? 'var(--brd)' : (btnDisabled ? 'var(--brd)' : 'rgba(255,255,255,0.5)');
+  var btnInner  = isTraining
+    ? '<span class="spinner" style="margin-right:7px;vertical-align:middle"></span>' + btnLabel
+    : btnLabel;
+
+  html += '<button id="trainBtn" ' +
+    'style="width:100%;padding:13px;font-size:12px;font-weight:800;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:0;' +
+    'background:' + btnBg + ';' +
+    'color:' + btnColor + ';' +
+    'border:1px solid ' + btnBorder + ';' +
     'border-radius:10px;cursor:' + (btnDisabled ? 'not-allowed' : 'pointer') + ';' +
-    'letter-spacing:.06em;margin-bottom:10px;transition:opacity .15s" ' +
+    'letter-spacing:.06em;margin-bottom:10px;transition:background .2s,border-color .2s,opacity .15s;' +
+    (isTraining ? '' : (!btnDisabled ? 'box-shadow:0 0 0 0 rgba(255,255,255,0.2)' : '')) + '" ' +
     (btnDisabled ? 'disabled ' : '') +
-    'onclick="window._app.trainModel()">' +
-    btnLabel +
+    'onclick="this.style.opacity=\'0.6\';window._app.trainModel()">' +
+    btnInner +
     '</button>';
 
   // Post-training stats (shown only when trained)

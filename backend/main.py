@@ -661,7 +661,8 @@ def nn_load(model_type: str, source: str = 'camera'):
 
     unified_nn.from_json(json.loads(row['data']))
     _pred_buffer.reset()
-    return {"ok": True, "accuracy": unified_nn.accuracy, "epochs": unified_nn.epochs,
+    return {"ok": True, "accuracy": unified_nn.accuracy, "val_accuracy": unified_nn.val_accuracy,
+            "loss": unified_nn.loss, "epochs": unified_nn.epochs,
             "gestures": list(unified_nn.gestures.items())}
 
 @app.post("/api/nn/reset/{model_type}")

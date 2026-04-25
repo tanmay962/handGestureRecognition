@@ -167,8 +167,16 @@ export class AppController {
       var src = window._trainSource || 'camera';
       var ud = await (await fetch(API + '/nn/load/unified?source=' + src, {method:'POST'})).json();
       if (ud.ok) {
-        this.staticNN.trained  = true; this.staticNN.accuracy  = ud.accuracy||0; this.staticNN.epochs  = ud.epochs||0;
-        this.dynamicNN.trained = true; this.dynamicNN.accuracy = ud.accuracy||0; this.dynamicNN.epochs = ud.epochs||0;
+        this.staticNN.trained       = true;
+        this.staticNN.accuracy      = ud.accuracy     || 0;
+        this.staticNN.val_accuracy  = ud.val_accuracy || 0;
+        this.staticNN.loss          = ud.loss         != null ? ud.loss : 1;
+        this.staticNN.epochs        = ud.epochs       || 0;
+        this.dynamicNN.trained      = true;
+        this.dynamicNN.accuracy     = ud.accuracy     || 0;
+        this.dynamicNN.val_accuracy = ud.val_accuracy || 0;
+        this.dynamicNN.loss         = ud.loss         != null ? ud.loss : 1;
+        this.dynamicNN.epochs       = ud.epochs       || 0;
       }
     } catch(e) {}
 
@@ -205,13 +213,19 @@ export class AppController {
       // Final completion event carries accuracy/loss/epochs
       if (d.complete) {
         if (d.model === 'static' || d.model === 'unified') {
-          self.staticNN.accuracy = d.accuracy; self.staticNN.loss = d.loss;
-          self.staticNN.epochs = d.epochs; self.staticNN.trained = true;
+          self.staticNN.accuracy     = d.accuracy;
+          self.staticNN.val_accuracy = d.val_accuracy || 0;
+          self.staticNN.loss         = d.loss;
+          self.staticNN.epochs       = d.epochs;
+          self.staticNN.trained      = true;
           if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.static = d.per_gesture_acc; }
         }
         if (d.model === 'dynamic' || d.model === 'unified') {
-          self.dynamicNN.accuracy = d.accuracy; self.dynamicNN.loss = d.loss;
-          self.dynamicNN.epochs = d.epochs; self.dynamicNN.trained = true;
+          self.dynamicNN.accuracy     = d.accuracy;
+          self.dynamicNN.val_accuracy = d.val_accuracy || 0;
+          self.dynamicNN.loss         = d.loss;
+          self.dynamicNN.epochs       = d.epochs;
+          self.dynamicNN.trained      = true;
           if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.dynamic = d.per_gesture_acc; }
         }
       }
@@ -385,6 +399,8 @@ export class AppController {
   async trainModel() {
     if (this.trainCtrl.isTraining) return;
     await this.trainCtrl.train();
+    // Re-sync samples from DB so in-memory cache matches persisted state
+    await this.gestureModel.loadFromDB();
     await this._refreshTrainMeta();
     this.view.render();
   }
@@ -416,42 +432,47 @@ export class AppController {
   async addSample(gestureName, type) {
     var self = this;
     var statusEl = document.getElementById('trainStatus');
-    function showStatus(msg, color) {
+    function showStatus(msg, color, dur) {
       if (!statusEl) return;
-      statusEl.style.display = 'block';
-      statusEl.textContent   = msg;
+      statusEl.style.display    = 'block';
+      statusEl.textContent      = msg;
       statusEl.style.background = color;
-      statusEl.style.color   = 'var(--bg)';
+      statusEl.style.color      = '#000000';
+      statusEl.style.fontWeight = '700';
       clearTimeout(statusEl._t);
-      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 2600);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, dur || 2800);
     }
 
     if (type === 'static') {
-      showStatus('⏳ Get ready — capturing "' + gestureName + '" in 3s…', 'var(--a)');
+      showStatus('Get ready — capturing "' + gestureName + '" in 3s…', '#ffffff', 3500);
       var result = await this.trainCtrl.collectStaticSample(gestureName, false);
       if (result.error) {
-        showStatus('❌ ' + result.error, 'var(--r)');
+        showStatus('Error: ' + result.error, '#fb7185', 3500);
       } else {
+        // Refresh meta to get DB-confirmed count, then show it in the toast
+        await this._refreshTrainMeta();
+        var meta = window._trainMeta || {};
+        var dbCount = (meta[gestureName] && meta[gestureName].static) || '?';
         showStatus(
           result.live
-            ? '✓ Live sample captured for "' + gestureName + '"'
-            : '📦 Simulated sample for "' + gestureName + '" (no hand detected)',
-          result.live ? 'var(--g)' : 'var(--a)'
+            ? 'Saved "' + gestureName + '" — ' + dbCount + ' samples in DB'
+            : 'Simulated "' + gestureName + '" (no hand) — ' + dbCount + ' in DB',
+          result.live ? '#4ade80' : '#fbbf24',
+          2800
         );
       }
       window._lastSampledGesture = gestureName;
-      await this._refreshTrainMeta();
       this.view.render();
-      setTimeout(function(){ window._lastSampledGesture = null; }, 1600);
+      setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
 
     } else if (type === 'dynamic') {
       if (!this.camera.active) {
-        showStatus('⚠ Start camera first for dynamic recording!', 'var(--r)');
+        showStatus('Start camera first for dynamic recording!', '#fb7185', 3000);
         return;
       }
-      showStatus('⏳ Get ready — recording "' + gestureName + '" in 3s…', 'var(--a)');
+      showStatus('Get ready — recording "' + gestureName + '" in 3s…', '#ffffff', 3500);
       await this.trainCtrl.runCountdown(3);
-      showStatus('🎬 Recording "' + gestureName + '"… perform gesture NOW!', 'var(--p)');
+      showStatus('Recording "' + gestureName + '"… perform gesture NOW!', '#c084fc', 6000);
       this.trainCtrl.startDynamicRecording(gestureName);
       this.view.render();
 
@@ -459,39 +480,44 @@ export class AppController {
         var result = self.trainCtrl.pushRecordingFrame(data.features, data.handCount || 1);
         if (result === 'aborted') {
           unsub();
-          showStatus('⚠ Hand lost during recording — please try again', 'var(--r)');
+          showStatus('Hand lost during recording — please try again', '#fb7185', 3000);
           window._lastSampledGesture = null;
           self.view.render();
           return;
         }
-        var done = result === 'done';
-        if (done) {
+        if (result === 'done') {
           unsub();
-          showStatus('✓ Dynamic sample recorded for "' + gestureName + '"!', 'var(--g)');
-          window._lastSampledGesture = gestureName;
-          self._refreshTrainMeta().then(function(){ self.view.render(); });
-          setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
+          self._refreshTrainMeta().then(function() {
+            var meta2 = window._trainMeta || {};
+            var dbCount2 = (meta2[gestureName] && meta2[gestureName].dynamic) || '?';
+            showStatus('Saved "' + gestureName + '" dynamic — ' + dbCount2 + ' in DB', '#4ade80', 2800);
+            window._lastSampledGesture = gestureName;
+            self.view.render();
+            setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
+          });
         }
       });
     }
   }
 
   async addBulkSamples(name, count) {
-    var self = this;
     var statusEl = document.getElementById('trainStatus');
-    function showStatus(msg, color) {
+    function showStatus(msg, color, dur) {
       if (!statusEl) return;
-      statusEl.style.display = 'block';
-      statusEl.textContent   = msg;
+      statusEl.style.display    = 'block';
+      statusEl.textContent      = msg;
       statusEl.style.background = color;
-      statusEl.style.color   = 'var(--bg)';
+      statusEl.style.color      = '#000000';
+      statusEl.style.fontWeight = '700';
       clearTimeout(statusEl._t);
-      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 3000);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, dur || 3000);
     }
-    showStatus('⏳ Get ready — capturing ' + count + '× "' + name + '" in 3s…', 'var(--a)');
+    showStatus('Get ready — capturing ' + count + 'x "' + name + '" in 3s…', '#ffffff', 4000);
     await this.trainCtrl.collectBulkStatic(name, count);
-    showStatus('✓ ' + count + ' samples captured for "' + name + '"', 'var(--g)');
     await this._refreshTrainMeta();
+    var meta = window._trainMeta || {};
+    var dbCount = (meta[name] && meta[name].static) || '?';
+    showStatus('Saved ' + count + 'x "' + name + '" — ' + dbCount + ' total in DB', '#4ade80', 3000);
     this.view.render();
   }
 

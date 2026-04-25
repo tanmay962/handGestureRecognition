@@ -256,7 +256,8 @@ export class TrainingController {
     var data = await res.json();
 
     // Guard: backend returned an error (e.g. 401 admin PIN, 500 internal error)
-    if (!res.ok || data.error || !data.accuracy) {
+    // NOTE: do NOT use !data.accuracy — that is falsy for 0.0 and would hide a real (if low) result
+    if (!res.ok || data.error || data.accuracy == null) {
       this.isTraining = false;
       eventBus.emit(Events.TRAIN_COMPLETE, { error: data.error || data.detail || 'Training failed (server error)' });
       return;

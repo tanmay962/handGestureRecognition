@@ -1,5 +1,5 @@
 // Gesture Detection v1.0 — Production Bundle
-// Built: 2026-04-24T18:09:41.702Z
+// Built: 2026-04-25T02:07:56.959Z
 // MediaPipe Holistic: hands + face + body = 41 features
 // MLP static + LSTM dynamic + adaptive NLP + Gemini + PWA
 // Optimised: rate limiting, confidence smoothing, time-based stability
@@ -494,7 +494,6 @@ class GestureModel {
 
   async loadFromDB() {
     try {
-      var url = API + '/samples/meta';
       var loadUrl = API + '/samples/load?source=' + this.trainSource;
       var metaUrl = API + '/samples/meta';
 
@@ -504,6 +503,7 @@ class GestureModel {
       ]);
       var meta = results[0]; var samples = results[1];
 
+      // Rebuild counts from authoritative DB meta
       this.sampleCounts = {};
       for (var g in meta) {
         this.sampleCounts[g] = {
@@ -516,11 +516,19 @@ class GestureModel {
         };
         if (this.gestures.indexOf(g) < 0) this.gestures.push(g);
       }
-      for (var g in samples) {
-        if (samples[g].static)  this.staticSamples[g]  = samples[g].static;
-        if (samples[g].dynamic) this.dynamicSamples[g] = samples[g].dynamic;
+      // Replace sample vectors from DB — DB is the source of truth.
+      // Use DB data only when it has more or equal samples vs in-memory cache
+      // so that samples captured right before loadFromDB() are never dropped.
+      for (var gName in samples) {
+        var dbStatic  = samples[gName].static  || [];
+        var dbDynamic = samples[gName].dynamic || [];
+        var memStatic  = this.staticSamples[gName]  || [];
+        var memDynamic = this.dynamicSamples[gName] || [];
+        // Accept DB version if it has at least as many samples (it's fully persisted)
+        if (dbStatic.length  >= memStatic.length)  this.staticSamples[gName]  = dbStatic;
+        if (dbDynamic.length >= memDynamic.length) this.dynamicSamples[gName] = dbDynamic;
       }
-      console.log('[GestureModel] loaded from Python DB:', Object.keys(meta).length, 'gestures, source:', this.trainSource);
+      console.log('[GestureModel] loaded from DB:', Object.keys(meta).length, 'gestures, source:', this.trainSource);
     } catch(e) { console.warn('[GestureModel] load failed:', e); }
   }
 
@@ -2308,14 +2316,25 @@ function _renderTrainPanel(trainStats, isTraining, progress,
     html += '</div>';
   }
 
-  // Training progress bar (shown during training)
+  // ── Training progress section (shown while training is in progress) ──
   if (isTraining) {
-    html += '<div style="margin-bottom:12px">';
-    html += '<div style="display:flex;justify-content:space-between;margin-bottom:5px">';
-    html += '<span style="font-size:9px;color:var(--mx);letter-spacing:.08em">TRAINING IN PROGRESS</span>';
-    html += '<span style="font-size:9px;font-weight:700;color:#ffffff">' + Math.round(progress) + '%</span>';
+    var pct = Math.round(progress);
+    html += '<div style="margin-bottom:14px;padding:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px">';
+    // Header row: spinner + label + percent
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    html += '<span class="spinner"></span>';
+    html += '<span style="font-size:10px;font-weight:700;color:#ffffff;letter-spacing:.08em;flex:1">TRAINING IN PROGRESS</span>';
+    html += '<span style="font-size:11px;font-weight:800;color:#ffffff">' + pct + '%</span>';
     html += '</div>';
-    html += Bar(progress);
+    // Animated progress bar — striped shimmer while active
+    html += '<div style="height:6px;background:var(--s2);border-radius:3px;overflow:hidden">';
+    html += '<div style="width:' + pct + '%;height:100%;background:rgba(255,255,255,0.6);border-radius:3px;transition:width .4s ease;' +
+      'background-image:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,0.35) 50%,rgba(255,255,255,0) 100%);' +
+      'background-size:200% 100%;animation:shimmer 1.4s linear infinite"></div>';
+    html += '</div>';
+    if (pct > 0) {
+      html += '<div style="font-size:8px;color:var(--mx);margin-top:5px;text-align:right">' + pct + ' / 100% complete</div>';
+    }
     html += '</div>';
   }
 
@@ -2335,16 +2354,25 @@ function _renderTrainPanel(trainStats, isTraining, progress,
     btnDisabled = totalSamples === 0;
   }
 
-  html += '<button ' +
-    'style="width:100%;padding:13px;font-size:12px;font-weight:800;font-family:inherit;' +
-    'background:' + (btnDisabled ? 'var(--s2)' : 'rgba(255,255,255,0.1)') + ';' +
-    'color:' + (btnDisabled ? 'var(--dm)' : '#ffffff') + ';' +
-    'border:1px solid ' + (btnDisabled ? 'var(--brd)' : 'rgba(255,255,255,0.35)') + ';' +
+  // Button: show spinner inside when training, pulse border when clickable with samples ready
+  var btnBg     = isTraining ? 'var(--s2)' : (btnDisabled ? 'var(--s2)' : 'rgba(255,255,255,0.1)');
+  var btnColor  = btnDisabled ? 'rgba(255,255,255,0.35)' : '#ffffff';
+  var btnBorder = isTraining ? 'var(--brd)' : (btnDisabled ? 'var(--brd)' : 'rgba(255,255,255,0.5)');
+  var btnInner  = isTraining
+    ? '<span class="spinner" style="margin-right:7px;vertical-align:middle"></span>' + btnLabel
+    : btnLabel;
+
+  html += '<button id="trainBtn" ' +
+    'style="width:100%;padding:13px;font-size:12px;font-weight:800;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:0;' +
+    'background:' + btnBg + ';' +
+    'color:' + btnColor + ';' +
+    'border:1px solid ' + btnBorder + ';' +
     'border-radius:10px;cursor:' + (btnDisabled ? 'not-allowed' : 'pointer') + ';' +
-    'letter-spacing:.06em;margin-bottom:10px;transition:opacity .15s" ' +
+    'letter-spacing:.06em;margin-bottom:10px;transition:background .2s,border-color .2s,opacity .15s;' +
+    (isTraining ? '' : (!btnDisabled ? 'box-shadow:0 0 0 0 rgba(255,255,255,0.2)' : '')) + '" ' +
     (btnDisabled ? 'disabled ' : '') +
-    'onclick="window._app.trainModel()">' +
-    btnLabel +
+    'onclick="this.style.opacity=\'0.6\';window._app.trainModel()">' +
+    btnInner +
     '</button>';
 
   // Post-training stats (shown only when trained)
@@ -4049,7 +4077,8 @@ class TrainingController {
     var data = await res.json();
 
     // Guard: backend returned an error (e.g. 401 admin PIN, 500 internal error)
-    if (!res.ok || data.error || !data.accuracy) {
+    // NOTE: do NOT use !data.accuracy — that is falsy for 0.0 and would hide a real (if low) result
+    if (!res.ok || data.error || data.accuracy == null) {
       this.isTraining = false;
       eventBus.emit(Events.TRAIN_COMPLETE, { error: data.error || data.detail || 'Training failed (server error)' });
       return;
@@ -4276,8 +4305,16 @@ class AppController {
       var src = window._trainSource || 'camera';
       var ud = await (await fetch(API + '/nn/load/unified?source=' + src, {method:'POST'})).json();
       if (ud.ok) {
-        this.staticNN.trained  = true; this.staticNN.accuracy  = ud.accuracy||0; this.staticNN.epochs  = ud.epochs||0;
-        this.dynamicNN.trained = true; this.dynamicNN.accuracy = ud.accuracy||0; this.dynamicNN.epochs = ud.epochs||0;
+        this.staticNN.trained       = true;
+        this.staticNN.accuracy      = ud.accuracy     || 0;
+        this.staticNN.val_accuracy  = ud.val_accuracy || 0;
+        this.staticNN.loss          = ud.loss         != null ? ud.loss : 1;
+        this.staticNN.epochs        = ud.epochs       || 0;
+        this.dynamicNN.trained      = true;
+        this.dynamicNN.accuracy     = ud.accuracy     || 0;
+        this.dynamicNN.val_accuracy = ud.val_accuracy || 0;
+        this.dynamicNN.loss         = ud.loss         != null ? ud.loss : 1;
+        this.dynamicNN.epochs       = ud.epochs       || 0;
       }
     } catch(e) {}
 
@@ -4314,13 +4351,19 @@ class AppController {
       // Final completion event carries accuracy/loss/epochs
       if (d.complete) {
         if (d.model === 'static' || d.model === 'unified') {
-          self.staticNN.accuracy = d.accuracy; self.staticNN.loss = d.loss;
-          self.staticNN.epochs = d.epochs; self.staticNN.trained = true;
+          self.staticNN.accuracy     = d.accuracy;
+          self.staticNN.val_accuracy = d.val_accuracy || 0;
+          self.staticNN.loss         = d.loss;
+          self.staticNN.epochs       = d.epochs;
+          self.staticNN.trained      = true;
           if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.static = d.per_gesture_acc; }
         }
         if (d.model === 'dynamic' || d.model === 'unified') {
-          self.dynamicNN.accuracy = d.accuracy; self.dynamicNN.loss = d.loss;
-          self.dynamicNN.epochs = d.epochs; self.dynamicNN.trained = true;
+          self.dynamicNN.accuracy     = d.accuracy;
+          self.dynamicNN.val_accuracy = d.val_accuracy || 0;
+          self.dynamicNN.loss         = d.loss;
+          self.dynamicNN.epochs       = d.epochs;
+          self.dynamicNN.trained      = true;
           if (d.per_gesture_acc) { if (!window._perGestAcc) window._perGestAcc = {}; window._perGestAcc.dynamic = d.per_gesture_acc; }
         }
       }
@@ -4494,6 +4537,8 @@ class AppController {
   async trainModel() {
     if (this.trainCtrl.isTraining) return;
     await this.trainCtrl.train();
+    // Re-sync samples from DB so in-memory cache matches persisted state
+    await this.gestureModel.loadFromDB();
     await this._refreshTrainMeta();
     this.view.render();
   }
@@ -4525,42 +4570,47 @@ class AppController {
   async addSample(gestureName, type) {
     var self = this;
     var statusEl = document.getElementById('trainStatus');
-    function showStatus(msg, color) {
+    function showStatus(msg, color, dur) {
       if (!statusEl) return;
-      statusEl.style.display = 'block';
-      statusEl.textContent   = msg;
+      statusEl.style.display    = 'block';
+      statusEl.textContent      = msg;
       statusEl.style.background = color;
-      statusEl.style.color   = 'var(--bg)';
+      statusEl.style.color      = '#000000';
+      statusEl.style.fontWeight = '700';
       clearTimeout(statusEl._t);
-      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 2600);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, dur || 2800);
     }
 
     if (type === 'static') {
-      showStatus('⏳ Get ready — capturing "' + gestureName + '" in 3s…', 'var(--a)');
+      showStatus('Get ready — capturing "' + gestureName + '" in 3s…', '#ffffff', 3500);
       var result = await this.trainCtrl.collectStaticSample(gestureName, false);
       if (result.error) {
-        showStatus('❌ ' + result.error, 'var(--r)');
+        showStatus('Error: ' + result.error, '#fb7185', 3500);
       } else {
+        // Refresh meta to get DB-confirmed count, then show it in the toast
+        await this._refreshTrainMeta();
+        var meta = window._trainMeta || {};
+        var dbCount = (meta[gestureName] && meta[gestureName].static) || '?';
         showStatus(
           result.live
-            ? '✓ Live sample captured for "' + gestureName + '"'
-            : '📦 Simulated sample for "' + gestureName + '" (no hand detected)',
-          result.live ? 'var(--g)' : 'var(--a)'
+            ? 'Saved "' + gestureName + '" — ' + dbCount + ' samples in DB'
+            : 'Simulated "' + gestureName + '" (no hand) — ' + dbCount + ' in DB',
+          result.live ? '#4ade80' : '#fbbf24',
+          2800
         );
       }
       window._lastSampledGesture = gestureName;
-      await this._refreshTrainMeta();
       this.view.render();
-      setTimeout(function(){ window._lastSampledGesture = null; }, 1600);
+      setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
 
     } else if (type === 'dynamic') {
       if (!this.camera.active) {
-        showStatus('⚠ Start camera first for dynamic recording!', 'var(--r)');
+        showStatus('Start camera first for dynamic recording!', '#fb7185', 3000);
         return;
       }
-      showStatus('⏳ Get ready — recording "' + gestureName + '" in 3s…', 'var(--a)');
+      showStatus('Get ready — recording "' + gestureName + '" in 3s…', '#ffffff', 3500);
       await this.trainCtrl.runCountdown(3);
-      showStatus('🎬 Recording "' + gestureName + '"… perform gesture NOW!', 'var(--p)');
+      showStatus('Recording "' + gestureName + '"… perform gesture NOW!', '#c084fc', 6000);
       this.trainCtrl.startDynamicRecording(gestureName);
       this.view.render();
 
@@ -4568,39 +4618,44 @@ class AppController {
         var result = self.trainCtrl.pushRecordingFrame(data.features, data.handCount || 1);
         if (result === 'aborted') {
           unsub();
-          showStatus('⚠ Hand lost during recording — please try again', 'var(--r)');
+          showStatus('Hand lost during recording — please try again', '#fb7185', 3000);
           window._lastSampledGesture = null;
           self.view.render();
           return;
         }
-        var done = result === 'done';
-        if (done) {
+        if (result === 'done') {
           unsub();
-          showStatus('✓ Dynamic sample recorded for "' + gestureName + '"!', 'var(--g)');
-          window._lastSampledGesture = gestureName;
-          self._refreshTrainMeta().then(function(){ self.view.render(); });
-          setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
+          self._refreshTrainMeta().then(function() {
+            var meta2 = window._trainMeta || {};
+            var dbCount2 = (meta2[gestureName] && meta2[gestureName].dynamic) || '?';
+            showStatus('Saved "' + gestureName + '" dynamic — ' + dbCount2 + ' in DB', '#4ade80', 2800);
+            window._lastSampledGesture = gestureName;
+            self.view.render();
+            setTimeout(function(){ window._lastSampledGesture = null; self.view.render(); }, 1600);
+          });
         }
       });
     }
   }
 
   async addBulkSamples(name, count) {
-    var self = this;
     var statusEl = document.getElementById('trainStatus');
-    function showStatus(msg, color) {
+    function showStatus(msg, color, dur) {
       if (!statusEl) return;
-      statusEl.style.display = 'block';
-      statusEl.textContent   = msg;
+      statusEl.style.display    = 'block';
+      statusEl.textContent      = msg;
       statusEl.style.background = color;
-      statusEl.style.color   = 'var(--bg)';
+      statusEl.style.color      = '#000000';
+      statusEl.style.fontWeight = '700';
       clearTimeout(statusEl._t);
-      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, 3000);
+      statusEl._t = setTimeout(function(){ statusEl.style.display='none'; }, dur || 3000);
     }
-    showStatus('⏳ Get ready — capturing ' + count + '× "' + name + '" in 3s…', 'var(--a)');
+    showStatus('Get ready — capturing ' + count + 'x "' + name + '" in 3s…', '#ffffff', 4000);
     await this.trainCtrl.collectBulkStatic(name, count);
-    showStatus('✓ ' + count + ' samples captured for "' + name + '"', 'var(--g)');
     await this._refreshTrainMeta();
+    var meta = window._trainMeta || {};
+    var dbCount = (meta[name] && meta[name].static) || '?';
+    showStatus('Saved ' + count + 'x "' + name + '" — ' + dbCount + ' total in DB', '#4ade80', 3000);
     this.view.render();
   }
 

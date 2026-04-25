@@ -422,13 +422,17 @@ class UnifiedLSTMModel:
 
         BATCH_SIZE  = min(32, len(tr_in))
         n_train     = len(tr_in)
+        # Validation + weight-rebalance interval (every 10% of epochs)
         check_every = max(1, epochs // 10)
+        # Lightweight progress-only update interval (every ~2% of epochs so bar moves smoothly)
+        prog_every  = max(1, epochs // 50)
         swa_start   = int(epochs * 0.6)   # collect SWA snapshots from 60% onward
 
         best_val_acc      = -1.0
         best_state        = None
         swa_states        = []
         last_ep_loss      = 1.0
+        last_v_acc        = None
         no_improve_checks = 0
         patience_checks   = 3   # stop after 3 consecutive val checks with no improvement
 
@@ -466,14 +470,13 @@ class UnifiedLSTMModel:
             if ep >= swa_start:
                 swa_states.append({k: v.clone().cpu() for k, v in self.model.state_dict().items()})
 
+            # ── Heavy validation check (every check_every epochs) ───────────
             if (ep + 1) % check_every == 0:
-                v_acc = None
                 if vl_in:
                     self.model.eval()
-                    v_acc = self._eval_val(vl_in, vl_lb)
+                    last_v_acc = self._eval_val(vl_in, vl_lb)
 
                     # Confusion-aware dynamic weights — only in second half of training
-                    # so the model learns the basics before we focus on hard classes
                     if ep >= epochs // 2:
                         vl_r_ = self._prepare_batch(vl_in)
                         vl_s_ = np.array([self._scale_seq(s) for s in vl_r_])
@@ -486,30 +489,39 @@ class UnifiedLSTMModel:
                             m_ = (yv_ == ci)
                             if m_.sum() > 0:
                                 cls_acc = (vp_[m_] == yv_[m_]).float().mean().item()
-                                # max 2× boost for 0% accuracy, no boost for 80%+
                                 new_w[ci] = w[ci] * (1.0 + max(0.0, 0.8 - cls_acc))
                         new_w = new_w / new_w.sum() * len(self.gestures)
                         crit  = nn.CrossEntropyLoss(weight=new_w.to(DEVICE), label_smoothing=0.1)
 
-                    if v_acc >= best_val_acc:
-                        best_val_acc      = v_acc
+                    if last_v_acc >= best_val_acc:
+                        best_val_acc      = last_v_acc
                         best_state        = copy.deepcopy(self.model.state_dict())
                         no_improve_checks = 0
                     else:
                         no_improve_checks += 1
                     self.model.train()
 
-                if progress_cb:
-                    progress_cb({
-                        "epoch":        ep + 1,
-                        "total_epochs": epochs,
-                        "progress_pct": round((ep + 1) / epochs * 100),
-                        "train_loss":   round(last_ep_loss, 4),
-                        "val_acc":      round(v_acc, 4) if v_acc is not None else None,
-                    })
-
                 if vl_in and no_improve_checks >= patience_checks:
+                    # Send final progress before early-stop break
+                    if progress_cb:
+                        progress_cb({
+                            "epoch":        ep + 1,
+                            "total_epochs": epochs,
+                            "progress_pct": round((ep + 1) / epochs * 100),
+                            "train_loss":   round(last_ep_loss, 4),
+                            "val_acc":      round(last_v_acc, 4) if last_v_acc is not None else None,
+                        })
                     break
+
+            # ── Lightweight progress callback (every prog_every epochs) ─────
+            if progress_cb and (ep + 1) % prog_every == 0:
+                progress_cb({
+                    "epoch":        ep + 1,
+                    "total_epochs": epochs,
+                    "progress_pct": round((ep + 1) / epochs * 100),
+                    "train_loss":   round(last_ep_loss, 4),
+                    "val_acc":      round(last_v_acc, 4) if last_v_acc is not None else None,
+                })
 
         # Build SWA-averaged weights and compare against best-val checkpoint
         if swa_states:
