@@ -380,6 +380,13 @@ class NNTrainRequest(BaseModel):
     epochs:     int   = 30
     lr:         float = 0.001
 
+class NNTrainFromDBRequest(BaseModel):
+    model_type:      str   = 'unified'
+    epochs:          int   = 200
+    lr:              float = 0.001
+    source:          str   = 'camera'
+    feature_version: str   = '1.0'
+
 class PredictRequest(BaseModel):
     features:     list
     aux_features: list = []   # hand-swapped vector for independent aux-hand prediction
@@ -562,6 +569,112 @@ async def nn_train(req: NNTrainRequest):
         )
 
     # Sync auto-calibrated per-gesture thresholds to the runtime threshold map
+    if unified_nn.per_gesture_threshold:
+        with get_db() as db:
+            for gname, thresh in unified_nn.per_gesture_threshold.items():
+                _gesture_thresholds[gname] = thresh
+                db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)",
+                           (f"conf_threshold_{gname}", str(thresh)))
+
+    await push("train_progress", {
+        "model":                   req.model_type,
+        "accuracy":                unified_nn.accuracy,
+        "val_accuracy":            unified_nn.val_accuracy,
+        "loss":                    unified_nn.loss,
+        "epochs":                  unified_nn.epochs,
+        "per_gesture_acc":         unified_nn.per_gesture_acc,
+        "temperature":             unified_nn.temperature,
+        "per_gesture_threshold":   unified_nn.per_gesture_threshold,
+        "progress_pct":            100,
+        "complete":                True,
+    })
+    log_session("train_batch", detail=f"{req.model_type} acc={unified_nn.accuracy:.3f} val={unified_nn.val_accuracy:.3f} T={unified_nn.temperature:.2f}")
+    return {
+        "accuracy":              unified_nn.accuracy,
+        "val_accuracy":          unified_nn.val_accuracy,
+        "loss":                  unified_nn.loss,
+        "epochs":                unified_nn.epochs,
+        "per_gesture_acc":       unified_nn.per_gesture_acc,
+        "temperature":           unified_nn.temperature,
+        "per_gesture_threshold": unified_nn.per_gesture_threshold,
+    }
+
+@app.post("/api/nn/train_from_db")
+async def nn_train_from_db(req: NNTrainFromDBRequest):
+    """Train directly from DB samples — avoids large client→server upload (phone-friendly)."""
+    # Load gesture registry
+    with get_db() as db:
+        gesture_rows = list(db.execute(
+            "SELECT name, gesture_type FROM gesture_registry WHERE training_enabled=1 ORDER BY name"
+        ))
+
+    all_names     = [r['name'] for r in gesture_rows]
+    gesture_types = {r['name']: r['gesture_type'] for r in gesture_rows}
+
+    if not all_names:
+        return {"error": "No gestures registered", "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
+
+    # Load samples filtered by source
+    with get_db() as db:
+        if req.source == 'all':
+            s_list = list(db.execute("SELECT gesture, sample FROM static_samples WHERE quality >= 0.3"))
+            d_list = list(db.execute("SELECT gesture, frames  FROM dynamic_samples WHERE quality >= 0.3"))
+        else:
+            s_list = list(db.execute(
+                "SELECT gesture, sample FROM static_samples WHERE source=? AND quality >= 0.3",
+                (req.source,)
+            ))
+            d_list = list(db.execute(
+                "SELECT gesture, frames FROM dynamic_samples WHERE source=? AND quality >= 0.3",
+                (req.source,)
+            ))
+
+    sampled_gestures = {row['gesture'] for row in s_list} | {row['gesture'] for row in d_list}
+    if len(sampled_gestures) < 2:
+        return {"error": "Need at least 2 gestures with samples", "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
+
+    gesture_idx = {g: i for i, g in enumerate(all_names)}
+    all_inputs, all_labels = [], []
+    for row in s_list:
+        g = row['gesture']
+        if g in gesture_idx:
+            all_inputs.append(json.loads(row['sample']))
+            all_labels.append(gesture_idx[g])
+    for row in d_list:
+        g = row['gesture']
+        if g in gesture_idx:
+            all_inputs.append(json.loads(row['frames']))
+            all_labels.append(gesture_idx[g])
+
+    if not all_inputs:
+        return {"error": "No valid samples found", "accuracy": 0, "loss": 1, "epochs": 0, "per_gesture_acc": {}}
+
+    unified_nn.initialize(len(all_names), all_names, gesture_types)
+    unified_nn.feature_version = req.feature_version
+
+    _loop = asyncio.get_running_loop()
+
+    def _progress(stats):
+        asyncio.run_coroutine_threadsafe(
+            push("train_progress", {
+                "model":        req.model_type,
+                "epoch":        stats["epoch"],
+                "total_epochs": stats["total_epochs"],
+                "progress_pct": stats["progress_pct"],
+                "train_loss":   stats.get("train_loss"),
+                "val_acc":      stats.get("val_acc"),
+                "complete":     False,
+            }),
+            _loop,
+        )
+
+    async with _train_lock:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: unified_nn.train_batch(all_inputs, all_labels, req.epochs, req.lr, _progress),
+        )
+
     if unified_nn.per_gesture_threshold:
         with get_db() as db:
             for gname, thresh in unified_nn.per_gesture_threshold.items():
