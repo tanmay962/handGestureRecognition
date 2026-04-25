@@ -387,6 +387,9 @@ class NNTrainFromDBRequest(BaseModel):
     source:          str   = 'camera'
     feature_version: str   = '1.0'
 
+class ClearSamplesRequest(BaseModel):
+    source: str = 'all'   # 'camera' | 'glove' | 'all'
+
 class PredictRequest(BaseModel):
     features:     list
     aux_features: list = []   # hand-swapped vector for independent aux-hand prediction
@@ -998,6 +1001,25 @@ async def clear_samples(_: None = Depends(require_admin)):
     await push("samples_cleared", {})
     log_session("samples_cleared_all")
     return {"ok": True}
+
+@app.post("/api/samples/clear_source")
+async def clear_samples_source(req: ClearSamplesRequest):
+    """Clear training samples by source — no admin required (user's own data).
+    Resets the trained model so predictions reflect the new data set."""
+    with get_db() as db:
+        if req.source == 'all':
+            db.execute("DELETE FROM static_samples")
+            db.execute("DELETE FROM dynamic_samples")
+        else:
+            db.execute("DELETE FROM static_samples  WHERE source=?", (req.source,))
+            db.execute("DELETE FROM dynamic_samples WHERE source=?", (req.source,))
+        # Remove saved model so stale weights aren't used after clearing
+        db.execute("DELETE FROM models")
+    unified_nn.reset()
+    _pred_buffer.reset()
+    await push("samples_cleared", {"source": req.source})
+    log_session("samples_cleared", detail=f"source={req.source}")
+    return {"ok": True, "source": req.source}
 
 @app.delete("/api/samples/gesture")
 async def delete_gesture_samples(req: DeleteSamplesRequest):
